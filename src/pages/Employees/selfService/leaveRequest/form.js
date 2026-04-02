@@ -13,9 +13,9 @@ import { Field } from "formik";
 import PhoneInput from "react-phone-input-2";
 import "react-phone-input-2/lib/style.css";
 import { supabase } from "../../../../supabaseClient";
-import { Button } from "@mui/material";
-
+import { Button, Grid, Card, CardContent, Typography, Divider, Alert } from "@mui/material";
 import { useEmploymentTypesById } from "../../../../utils/hooks/api/employmentType";
+import { usePreviousLeaveRequests, useEmployeeActiveLoans } from "../../../../utils/hooks/api/usePreviousLeaveRequests";
 
 // --- small helpers ---
 const toYMD = (d) =>
@@ -50,6 +50,12 @@ const NewLeaveRequestForm = ({
     refresh: refreshQuotas,
   } = useEmployeeLeaveQuota(employeeId);
 
+  // Previous leave requests for reference dropdown
+  const { data: previousLeaves = [] } = usePreviousLeaveRequests(employeeId);
+
+  // Employee asset/loan summary
+  const { loans = [], assets = [], loading: summaryLoading } = useEmployeeActiveLoans(employeeId);
+
   // employment type
   const { data: empType } = useEmploymentTypesById(employment_type_id);
   const [allowCurrentLeaveDate, setAllowCurrentLeaveDate] = useState(null);
@@ -77,6 +83,7 @@ const NewLeaveRequestForm = ({
     replacement_employee_id: null,
     attachment_path: null,
     reason: "",
+    last_vacation_ref: null,
   };
 
   const [initialValuesState, setInitialValues] = useState(defaultValues);
@@ -132,10 +139,11 @@ const NewLeaveRequestForm = ({
             replacement_employee_id: row.replacement_employee_id || null,
             attachment_path: row.attachment_path || null,
             reason: row.reason || "",
+            last_vacation_ref: row.last_vacation_ref || null,
           });
         }
       } else if (!isCancelled) {
-        setInitialValues(defaultValues);
+        setInitialValues({ ...defaultValues, last_vacation_ref: null });
       }
     };
 
@@ -387,6 +395,89 @@ const NewLeaveRequestForm = ({
                     placeholder="Select Replacement Employee"
                     required={values.leave_type != "Sick Leave"}
                   />
+                )}
+
+                {/* Last Returned Date - auto-populated from most recent approved leave */}
+                {previousLeaves.length > 0 && (
+                  <FormikInputField
+                    name="last_return_date"
+                    label="Last Returned Date"
+                    type="text"
+                    value={
+                      previousLeaves[0]
+                        ? `${previousLeaves[0].leave_type || "Leave"} — ${previousLeaves[0].start_date} to ${previousLeaves[0].end_date}`
+                        : "N/A"
+                    }
+                    disabled={true}
+                  />
+                )}
+
+                {/* Last Vacation Reference dropdown */}
+                {!isViewOnly && previousLeaves.length > 0 && (
+                  <FormikSelectField
+                    name="last_vacation_ref"
+                    label="Reference to Previous Leave (Optional)"
+                    options={[
+                      { label: "None", value: null },
+                      ...previousLeaves.map((pl) => ({
+                        label: `${pl.leave_type || "Leave"}: ${pl.start_date} to ${pl.end_date}`,
+                        value: pl.id,
+                      })),
+                    ]}
+                    placeholder="Select a previous leave to reference"
+                  />
+                )}
+
+                {/* Employee Status Summary Panel */}
+                {!isViewOnly && !summaryLoading && (loans.length > 0 || assets.length > 0) && (
+                  <Card variant="outlined" sx={{ mb: 2 }}>
+                    <CardContent>
+                      <Typography variant="subtitle2" fontWeight="bold" gutterBottom>
+                        Employee Status Summary
+                      </Typography>
+                      <Divider sx={{ mb: 1.5 }} />
+                      <Grid container spacing={2}>
+                        {loans.length > 0 && (
+                          <Grid item xs={12} sm={6}>
+                            <Alert severity="warning" sx={{ py: 0.5 }}>
+                              <Typography variant="caption" display="block" fontWeight="bold">
+                                Active Loans ({loans.length})
+                              </Typography>
+                              {loans.slice(0, 3).map((l) => (
+                                <Typography key={l.id} variant="caption" display="block">
+                                  {l.loan_type || "Loan"} — {l.approved_amount ? `SAR ${Number(l.approved_amount).toLocaleString()}` : "Amount pending"}
+                                </Typography>
+                              ))}
+                              {loans.length > 3 && (
+                                <Typography variant="caption" color="text.secondary">
+                                  +{loans.length - 3} more
+                                </Typography>
+                              )}
+                            </Alert>
+                          </Grid>
+                        )}
+                        {assets.length > 0 && (
+                          <Grid item xs={12} sm={6}>
+                            <Alert severity="info" sx={{ py: 0.5 }}>
+                              <Typography variant="caption" display="block" fontWeight="bold">
+                                Assigned Assets ({assets.length})
+                              </Typography>
+                              {assets.slice(0, 3).map((a) => (
+                                <Typography key={a.id} variant="caption" display="block">
+                                  {a.asset?.name || "Asset"} {a.asset?.asset_code ? `(${a.asset.asset_code})` : ""}
+                                </Typography>
+                              ))}
+                              {assets.length > 3 && (
+                                <Typography variant="caption" color="text.secondary">
+                                  +{assets.length - 3} more
+                                </Typography>
+                              )}
+                            </Alert>
+                          </Grid>
+                        )}
+                      </Grid>
+                    </CardContent>
+                  </Card>
                 )}
 
                 <FormikInputField name="reason" label="Reason" rows={4} />

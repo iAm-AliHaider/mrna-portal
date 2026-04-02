@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import { Formik, Form } from "formik";
 import Modal from "../../../../components/common/Modal";
 import SubmitButton from "../../../../components/common/SubmitButton";
@@ -7,6 +7,8 @@ import FormikSelectField from "../../../../components/common/FormikSelectField";
 import CustomTable from "../../../../components/tables/customeTable";
 import { useEmployeeLeaveQuota } from "../../../../utils/hooks/api/useEmployeeLeaveQuota";
 import { useUser } from "../../../../context/UserContext";
+import { supabase } from "../../../../supabaseClient";
+import { Alert, Typography, Box } from "@mui/material";
 
 const LeaveEncashmentForm = ({
   onClose,
@@ -20,6 +22,21 @@ const LeaveEncashmentForm = ({
   const { user } = useUser();
   const employeeId = user?.id;
   const { data: leaveQuotas = [] } = useEmployeeLeaveQuota(employeeId);
+  const [employeeSalary, setEmployeeSalary] = useState(0);
+
+  // Fetch employee's basic salary for projected payment calc
+  useEffect(() => {
+    if (!employeeId) return;
+    const fetchSalary = async () => {
+      const { data, error } = await supabase
+        .from("employees")
+        .select("basic_salary")
+        .eq("id", employeeId)
+        .single();
+      if (!error && data) setEmployeeSalary(Number(data.basic_salary) || 0);
+    };
+    fetchSalary();
+  }, [employeeId]);
 
   const encashableTypes = leaveQuotas.filter(
     (q) => q.leave_type?.can_encash === true || q.leave_type?.allow_encashment === true
@@ -99,6 +116,44 @@ const LeaveEncashmentForm = ({
               disabled={isViewOnly}
               required
             />
+
+            {/* Projected Payment + Quota Validation */}
+            {!isViewOnly && values.days_encashed && values.leave_type_id && (
+              (() => {
+                const sq = encashableTypes.find(
+                  (q) => (q.id || q.leave_type_id) === values.leave_type_id
+                );
+                const remaining = sq
+                  ? (sq.leave_type?.days_allowed ?? 0) - (sq.availed_leaves ?? 0)
+                  : 0;
+                const daily = employeeSalary ? employeeSalary / 30 : 0;
+                const projected = Number(values.days_encashed) * daily;
+                const exceeds = Number(values.days_encashed) > remaining;
+                return (
+                  <Box mt={1} mb={2}>
+                    {exceeds && (
+                      <Alert severity="error" sx={{ mb: 1 }}>
+                        Cannot encash {values.days_encashed} days — only {remaining} days remaining in quota.
+                      </Alert>
+                    )}
+                    {daily > 0 && (
+                      <Alert severity="info">
+                        <Typography variant="caption" display="block" fontWeight="bold" gutterBottom>
+                          Projected Encashment Payment
+                        </Typography>
+                        <Typography variant="body2">
+                          {values.days_encashed} days × SAR {daily.toFixed(2)}/day ={" "}
+                          <strong>SAR {projected.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</strong>
+                        </Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          (Based on basic salary SAR {employeeSalary.toLocaleString()}/month)
+                        </Typography>
+                      </Alert>
+                    )}
+                  </Box>
+                );
+              })()
+            )}
 
             <FormikInputField
               name="reason"

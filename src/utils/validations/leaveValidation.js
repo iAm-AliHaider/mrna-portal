@@ -89,6 +89,8 @@ replacement_employee_id: Yup.mixed()
     }),
 
   reason: Yup.string(),
+
+  last_vacation_ref: Yup.mixed().nullable(),
 });
 
 export default leaveValidationSchema;
