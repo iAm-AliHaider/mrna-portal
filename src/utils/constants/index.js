@@ -341,6 +341,11 @@ export const SIDEBAR_MENU_DATA = [
         allowedTo: [ROLES.HR, ROLES.HR_MANAGER, ROLES.ADMIN],
       },
       {
+        label: "Exit Interviews",
+        path: "/admin/human-resource/exit-interviews",
+        allowedTo: [ROLES.HR, ROLES.HR_MANAGER, ROLES.ADMIN],
+      },
+      {
         label: "On Boarding Tasks",
         path: "/employees/onboarding-tasks",
         allowedTo: [ROLES.ADMIN, ROLES.HR, ROLES.HR_MANAGER],
@@ -599,6 +604,11 @@ export const SIDEBAR_MENU_DATA = [
       {
         label: "Leave Encashment",
         path: "/self/leave-encashment",
+        allowedTo: [ROLES.EMPLOYEE, ROLES.HR, ROLES.MANAGER, ROLES.HOD, ROLES.HR_MANAGER],
+      },
+      {
+        label: "Exit Interview",
+        path: "/self/exit-interview",
         allowedTo: [ROLES.EMPLOYEE, ROLES.HR, ROLES.MANAGER, ROLES.HOD, ROLES.HR_MANAGER],
       },
       {
@@ -1387,6 +1397,11 @@ export const ROUTE_PERMISSIONS = {
     ROLES.ADMIN,
   ],
   "/admin/human-resource/off-boarding": [
+    ROLES.ADMIN,
+    ROLES.HR,
+    ROLES.HR_MANAGER,
+  ],
+  "/admin/human-resource/exit-interviews": [
     ROLES.ADMIN,
     ROLES.HR,
     ROLES.HR_MANAGER,

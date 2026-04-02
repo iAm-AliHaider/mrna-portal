@@ -176,6 +176,8 @@ const DepartmentChangePage = lazy(() => import("./pages/Employees/selfService/de
 const LocationChangePage = lazy(() => import("./pages/Employees/selfService/locationChange/list"));
 const FamilyStatusChangePage = lazy(() => import("./pages/Employees/selfService/familyStatusChange/list"));
 const LeaveSchedulePage = lazy(() => import("./pages/Admin/humanResource/leaveSchedule/list"));
+const ExitInterviewPage = lazy(() => import("./pages/Employees/selfService/exitInterview/list"));
+const ExitInterviewAdminPage = lazy(() => import("./pages/Admin/humanResource/exitInterview/list"));
 const PromotionsListPage = lazy(() => import("./pages/Admin/humanResource/promotions/list"));
 const AssetTrackingPage = lazy(() => import("./pages/Admin/assetManagement/tracking/list"));
 const AssetMaintenancePage = lazy(() => import("./pages/Admin/assetManagement/maintenance/list"));
@@ -1537,6 +1539,7 @@ function App() {
           <Route path="*" element={<NotFoundPage />} />
           {/* ===== NEW SELF SERVICE ROUTES ===== */}
           <Route path="/self/leave-encashment" element={<Layout><LeaveEncashmentPage /></Layout>} />
+          <Route path="/self/exit-interview" element={<Layout><ExitInterviewPage /></Layout>} />
           <Route path="/self/leave-adjustment" element={<Layout><LeaveAdjustmentPage /></Layout>} />
           <Route path="/self/official-hours-permission" element={<Layout><OfficialHoursPermissionPage /></Layout>} />
           <Route path="/self/personal-hours-permission" element={<Layout><PersonalHoursPermissionPage /></Layout>} />
@@ -1548,6 +1551,7 @@ function App() {
           <Route path="/self/family-status-change" element={<Layout><FamilyStatusChangePage /></Layout>} />
           {/* ===== NEW ADMIN ROUTES ===== */}
           <Route path="/admin/human-resource/leave-schedule" element={<Layout><LeaveSchedulePage /></Layout>} />
+          <Route path="/admin/human-resource/exit-interviews" element={<Layout><ExitInterviewAdminPage /></Layout>} />
           <Route path="/admin/human-resource/promotions" element={<Layout><PromotionsListPage /></Layout>} />
           <Route path="/admin/asset-management/tracking" element={<Layout><AssetTrackingPage /></Layout>} />
           <Route path="/admin/asset-management/maintenance" element={<Layout><AssetMaintenancePage /></Layout>} />
