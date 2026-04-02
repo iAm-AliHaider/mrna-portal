@@ -1,0 +1,39 @@
+-- 1) Create the trigger function
+CREATE OR REPLACE FUNCTION public.announcement_ack_counts()
+RETURNS trigger AS $$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    -- On new acknowledgement, always bump views
+    UPDATE public.announcements
+    SET
+      views = COALESCE(views, 0) + 1,
+      likes = COALESCE(likes, 0) + (CASE WHEN NEW.is_liked THEN 1 ELSE 0 END)
+    WHERE id = NEW.announcement_id;
+
+  ELSIF TG_OP = 'UPDATE' THEN
+    -- If they just acknowledged (false → true), bump views
+    -- IF NEW.acknowledged AND NOT OLD.acknowledged THEN
+    --   UPDATE public.announcements
+    --   SET views = COALESCE(views, 0) + 1
+    --   WHERE id = NEW.announcement_id;
+    -- END IF;
+
+    -- If they just liked it (false → true), bump likes
+    IF NEW.is_liked AND NOT OLD.is_liked THEN
+      UPDATE public.announcements
+      SET likes = COALESCE(likes, 0) + 1
+      WHERE id = NEW.announcement_id;
+    END IF;
+  END IF;
+
+  RETURN NULL;  -- AFTER triggers ignore the return value
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- 2) Attach it as an AFTER INSERT OR UPDATE trigger
+CREATE TRIGGER trg_announcement_ack_counts
+AFTER INSERT OR UPDATE
+ON public.announcement_acknowledgements
+FOR EACH ROW
+EXECUTE FUNCTION public.announcement_ack_counts();

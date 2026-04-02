@@ -1,0 +1,325 @@
+-- Step 1: Insert into company_info
+INSERT INTO public.company_info (
+    id, company_code, name, trade_name, registration_no, national_id,
+    value_added_tax_id, website, email, tax_type, social_security_scheme,
+    holiday_definition, saving_scheme, company_type, currency,
+    company_services, company_account, social_security_account, salary_account,
+    advance_paid, erp_link, comments
+) VALUES (
+    1, 'CMP001', 'Test Company LLC', 'TestCo', 'REG123456', 'NAT78910',
+    'VAT12345', 'https://testco.example.com', 'contact@testco.com', 'local', 'public',
+    '{"holidays": ["2025-01-01", "2025-12-25"]}'::jsonb, 'pension', 'private', 'USD',
+    '{"featureA": true, "featureB": false}'::jsonb, '1234567890', '0987654321', '1122334455',
+    true, 'https://erp.testco.com', 'Internal notes'
+);
+
+-- Step 2: Insert into branches
+INSERT INTO public.branches (
+    id, company_id, name, short_code, lat, long
+) VALUES
+(1, 1, 'Downtown Branch', NULL, 40.712776, -74.005974),
+(2, 1, 'Uptown Branch', NULL, 40.787011, -73.975368),
+(3, 1, 'Eastside Branch', NULL, 40.763641, -73.961796),
+(4, 1, 'Westside Branch', NULL, 40.775034, -73.981846),
+(5, 1, 'Northside Branch', NULL, 40.803019, -73.953423),
+(6, 1, 'Southside Branch', NULL, 40.700292, -73.987495),
+(7, 1, 'Airport Branch', NULL, 40.641311, -73.778139),
+(8, 1, 'Harbor Branch', NULL, 40.700292, -74.012084),
+(9, 1, 'Midtown Branch', NULL, 40.754932, -73.984016),
+(10, 1, 'Suburban Branch', NULL, 40.856554, -73.941912),
+(11, 1, 'Tech Park Branch', NULL, 37.387474, -122.057543),
+(12, 1, 'Business District Branch', NULL, 34.052235, -118.243683),
+(13, 1, 'University Branch', NULL, 42.360082, -71.058880),
+(14, 1, 'Industrial Branch', NULL, 41.878113, -87.629799),
+(15, 1, 'Mall Branch', NULL, 33.941589, -118.408530),
+(16, 1, 'Riverside Branch', NULL, 36.778259, -119.417931),
+(17, 1, 'Lakeside Branch', NULL, 44.977753, -93.265015),
+(18, 1, 'Mountain Branch', NULL, 39.739235, -104.990250),
+(19, 1, 'Valley Branch', NULL, 34.052235, -117.289765),
+(20, 1, 'Parkside Branch', NULL, 37.774929, -122.419418);
+
+
+
+
+
+
+-- Step 3: Insert into organizational_units
+INSERT INTO public.organizational_units (
+    id, company_id, name, code, parent_id, level, location, head_id, status
+) VALUES
+(21, 1, 'Head Office', 'HO', NULL, 0, 1, NULL, 'active'),
+(26, 1, 'Finance Department', 'FIN', 27, 1, 1, NULL, 'active'),
+(27, 1, 'Human Resources', 'HR', 26, 1, 1, NULL, 'active'),
+(28, 1, 'IT Department', 'IT', 21, 1, 1, NULL, 'active'),
+(29, 1, 'Payroll Team', 'PAY', 21, 2, 1, NULL, 'active'),
+(32, 1, 'Corporate Headquarters', 'HQ', NULL, 0, 1, NULL, 'active');
+
+-- Step 4: Insert into designations
+INSERT INTO public.designations (
+    id, name, code, department_id, company_id, job_description,
+    grade_id, policy_id, status
+) VALUES
+(1, 'HR Officer', 'HR001', 1, 1, 'Handles HR tasks', 1, 1, 'active'),
+(2, 'Software Engineer', 'SE001', 1, 1, 'Responsible for developing and maintaining software applications.', 1, 1, 'active'),
+(3, 'Senior Software Engineer', 'SSE002', 1, 1, 'Leads development projects and mentors junior engineers.', 1, 1, 'active'),
+(4, 'QA Engineer', 'QA003', 1, 1, 'Designs and executes test plans to ensure product quality.', 1, 1, 'active'),
+(5, 'DevOps Engineer', 'DE004', 1, 1, 'Manages CI/CD pipelines, infrastructure, and deployments.', 1, 1, 'active'),
+(6, 'Product Manager', 'PM005', 1, 1, 'Oversees product roadmap and coordinates between teams.', 1, 1, 'active'),
+(7, 'UX/UI Designer', 'UX006', 1, 1, 'Creates user interface designs and ensures usability.', 1, 1, 'active'),
+(8, 'Business Analyst', 'BA007', 1, 1, 'Analyzes business requirements and translates them into technical specs.', 1, 1, 'active'),
+(9, 'HR Specialist', 'HR008', 1, 1, 'Handles recruitment, onboarding, and employee relations.', 1, 1, 'active'),
+(10, 'Finance Manager', 'FM009', 1, 1, 'Manages financial planning, budgeting, and reporting.', 1, 1, 'active'),
+(11, 'IT Support Technician', 'IT010', 1, 1, 'Provides technical support and troubleshooting for hardware and software.', 1, 1, 'active');
+
+-- Step 5: Insert into contract_definitions
+INSERT INTO public.contract_definitions (
+    id, contract_name, description
+) VALUES
+(1, 'Standard Full Time', 'Full-time permanent contract with 30-day notice period'),
+(2, 'Part Time', 'Six-month fixed-term contract, no probation'),
+(3, 'Contractual', 'Part-time contract paid on an hourly basis'),
+(4, 'Hourly', NULL);
+
+
+-- Step 6: Insert into candidates
+INSERT INTO public.candidates (
+    id, candidate_no, company_id, designation, filing_date, cv,
+    first_name, family_name, national_id, nationality, gender,
+    blood_group, religion, country, state, po_box, zip_code,
+    telephone, mobile, other_number, email, driving_license,
+    address, notes, birth_place, date_of_birth, passport_type,
+    passport_number, issue_place, issue_date, expiry_date,
+    high_school_average, selection_status, is_employee,
+    second_name, third_name, forth_name,
+    computer_skills, current_benefits, expected_salary,
+    experience_years, father_name, high_school_stream, number_of_subordinates,
+    is_deleted, password, email_verification
+) VALUES (
+    3, 'CAN001', 1, 1, '2024-05-01', 'https://cvstorage.example.com/can001.pdf',
+    'Mrna', 'Admin', '12345678909', 'AF', 'Male',
+    'O+', '4', 'AL', 'DV', '12345', '90210',
+    '3364464985', '3364464985', '3364464985', 'ptools@itassociates.sa', true,
+    '123 Maple St', 'Good candidate', 'Los Angeles', '1990-07-15', 'diplomatic',
+    '12132', 'US Passport Office', '2018-01-01', '2028-01-01',
+    88.5, NULL, true,
+    NULL, NULL, NULL,
+    '12', '12', '12',
+    '12', '12', 'arts', '12',
+    false, 'rXqR9SRYnwRWAYKh1NzelefX0+F/gBILv+Oq4BJ7wk0=', false
+);
+
+-- Step 7: Insert into employees
+INSERT INTO public.employees (
+    id, role_columns, company_id, company_employee_status, employee_code,
+    belongs_to, designation_type, user_status, employee_status, candidate_id,
+    shift_start_time, shift_end_time, is_deleted, employment_type_id,
+    password, branch_id, organizational_unit_id, is_off_boarding_approve
+) VALUES (
+    3, '{"roles": ["admin","hr_manager"]}'::jsonb, 1, 'active', 'EMP001',
+    NULL, 1, 'active', 'permanent', 3,
+    '09:00:00', '18:00:00', false, NULL,
+    NULL, 1, 21, 'pending'
+);
+
+-- Step 8: Insert into policy
+INSERT INTO public.policy (
+    id, name, description, is_mandatory, applicable_to, effective_from,
+    created_by_id, status, document_url
+) VALUES (
+    38, 'Absent', 'Velit officiis magn', true, 'Ea quo explicabo Si', '2025-06-12',
+    3, 'active', NULL
+);
+
+-- Step 9: Insert into surveys
+INSERT INTO public.surveys (
+    id, survey_name, priority, group_by, survey_type,
+    created_by_id, company_id, department_id, status
+) VALUES
+(1, 'Customer Satisfaction Survey', 'High', 'Department', 'Feedback', 3, 1, 21, NULL),
+(3, 'Customer Credit check Survey', 'High', 'Department', 'Feedback', 3, 1, 21, NULL);
+
+
+
+
+
+
+
+
+/////  Tested DB 
+
+
+
+
+
+
+-- Step 1: company_info
+INSERT INTO public.company_info (
+    id, company_code, name, trade_name, registration_no, national_id,
+    value_added_tax_id, website, email, tax_type, social_security_scheme,
+    holiday_definition, saving_scheme, company_type, currency,
+    company_services, company_account, social_security_account, salary_account,
+    advance_paid, erp_link, comments
+) VALUES (
+    1, 'CMP001', 'Test Company LLC', 'TestCo', 'REG123456', 'NAT78910',
+    'VAT12345', 'https://testco.example.com', 'contact@testco.com', 'local', 'public',
+    '{"holidays": ["2025-01-01", "2025-12-25"]}'::jsonb, 'pension', 'private', 'USD',
+    '{"featureA": true, "featureB": false}'::jsonb, '1234567890', '0987654321', '1122334455',
+    true, 'https://erp.testco.com', 'Internal notes'
+);
+
+-- Step 2: branches
+INSERT INTO public.branches (
+    id, company_id, name, short_code, lat, long
+) VALUES
+(1, 1, 'Downtown Branch', NULL, 40.712776, -74.005974),
+(2, 1, 'Uptown Branch', NULL, 40.787011, -73.975368),
+(3, 1, 'Eastside Branch', NULL, 40.763641, -73.961796),
+(4, 1, 'Westside Branch', NULL, 40.775034, -73.981846),
+(5, 1, 'Northside Branch', NULL, 40.803019, -73.953423),
+(6, 1, 'Southside Branch', NULL, 40.700292, -73.987495),
+(7, 1, 'Airport Branch', NULL, 40.641311, -73.778139),
+(8, 1, 'Harbor Branch', NULL, 40.700292, -74.012084),
+(9, 1, 'Midtown Branch', NULL, 40.754932, -73.984016),
+(10, 1, 'Suburban Branch', NULL, 40.856554, -73.941912),
+(11, 1, 'Tech Park Branch', NULL, 37.387474, -122.057543),
+(12, 1, 'Business District Branch', NULL, 34.052235, -118.243683),
+(13, 1, 'University Branch', NULL, 42.360082, -71.058880),
+(14, 1, 'Industrial Branch', NULL, 41.878113, -87.629799),
+(15, 1, 'Mall Branch', NULL, 33.941589, -118.408530),
+(16, 1, 'Riverside Branch', NULL, 36.778259, -119.417931),
+(17, 1, 'Lakeside Branch', NULL, 44.977753, -93.265015),
+(18, 1, 'Mountain Branch', NULL, 39.739235, -104.990250),
+(19, 1, 'Valley Branch', NULL, 34.052235, -117.289765),
+(20, 1, 'Parkside Branch', NULL, 37.774929, -122.419418);
+
+-- Step 3: organizational_units
+INSERT INTO public.organizational_units (
+    id, company_id, name, code, parent_id, level, location, head_id, status
+) VALUES
+(21, 1, 'Head Office', 'HO', NULL, 0, 1, NULL, 'active'),
+(26, 1, 'Finance Department', 'FIN', 27, 1, 1, NULL, 'active'),
+(27, 1, 'Human Resources', 'HR', 26, 1, 1, NULL, 'active'),
+(28, 1, 'IT Department', 'IT', 21, 1, 1, NULL, 'active'),
+(29, 1, 'Payroll Team', 'PAY', 21, 2, 1, NULL, 'active'),
+(32, 1, 'Corporate Headquarters', 'HQ', NULL, 0, 1, NULL, 'active');
+
+-- Step 4: designations
+INSERT INTO public.designations (
+    id, name, code, department_id, company_id, job_description,
+    grade_id, policy_id, status
+) VALUES
+(1, 'HR Officer', 'HR001', 1, 1, 'Handles HR tasks', 1, 1, 'active'),
+(2, 'Software Engineer', 'SE001', 1, 1, 'Responsible for developing and maintaining software applications.', 1, 1, 'active'),
+(3, 'Senior Software Engineer', 'SSE002', 1, 1, 'Leads development projects and mentors junior engineers.', 1, 1, 'active'),
+(4, 'QA Engineer', 'QA003', 1, 1, 'Designs and executes test plans to ensure product quality.', 1, 1, 'active'),
+(5, 'DevOps Engineer', 'DE004', 1, 1, 'Manages CI/CD pipelines, infrastructure, and deployments.', 1, 1, 'active'),
+(6, 'Product Manager', 'PM005', 1, 1, 'Oversees product roadmap and coordinates between teams.', 1, 1, 'active'),
+(7, 'UX/UI Designer', 'UX006', 1, 1, 'Creates user interface designs and ensures usability.', 1, 1, 'active'),
+(8, 'Business Analyst', 'BA007', 1, 1, 'Analyzes business requirements and translates them into technical specs.', 1, 1, 'active'),
+(9, 'HR Specialist', 'HR008', 1, 1, 'Handles recruitment, onboarding, and employee relations.', 1, 1, 'active'),
+(10, 'Finance Manager', 'FM009', 1, 1, 'Manages financial planning, budgeting, and reporting.', 1, 1, 'active'),
+(11, 'IT Support Technician', 'IT010', 1, 1, 'Provides technical support and troubleshooting for hardware and software.', 1, 1, 'active');
+
+-- Step 5: contract_definitions
+INSERT INTO public.contract_definitions (
+    id, contract_name, description
+) VALUES
+(1, 'Standard Full Time', 'Full-time permanent contract with 30-day notice period'),
+(2, 'Part Time', 'Six-month fixed-term contract, no probation'),
+(3, 'Contractual', 'Part-time contract paid on an hourly basis'),
+(4, 'Hourly', NULL);
+
+-- Step 6: candidates
+INSERT INTO public.candidates (
+    id, candidate_no, company_id, designation, filing_date, cv,
+    first_name, family_name, national_id, nationality, gender,
+    blood_group, religion, country, state, po_box, zip_code,
+    telephone, mobile, other_number, email, driving_license,
+    address, notes, birth_place, date_of_birth, passport_type,
+    passport_number, issue_place, issue_date, expiry_date,
+    high_school_average, selection_status, is_employee,
+    second_name, third_name, forth_name,
+    computer_skills, current_benefits, expected_salary,
+    experience_years, father_name, high_school_stream, number_of_subordinates,
+    is_deleted, password, email_verification
+) VALUES (
+    3, 'CAN001', 1, 1, '2024-05-01', 'https://cvstorage.example.com/can001.pdf',
+    'Mrna', 'Admin', '12345678909', 'AF', 'Male',
+    'O+', '4', 'AL', 'DV', '12345', '90210',
+    '3364464985', '3364464985', '3364464985', 'ptools@itassociates.sa', true,
+    '123 Maple St', 'Good candidate', 'Los Angeles', '1990-07-15', 'diplomatic',
+    '12132', 'US Passport Office', '2018-01-01', '2028-01-01',
+    88.5, NULL, true,
+    NULL, NULL, NULL,
+    '12', '12', '12',
+    '12', '12', 'arts', '12',
+    false, 'rXqR9SRYnwRWAYKh1NzelefX0+F/gBILv+Oq4BJ7wk0=', false
+);
+
+-- Step 7: employees
+INSERT INTO public.employees (
+    id, role_columns, company_id, company_employee_status, employee_code,
+    belongs_to, designation_type, user_status, employee_status, candidate_id,
+    shift_start_time, shift_end_time, is_deleted, employment_type_id,
+    password, branch_id, organizational_unit_id, is_off_boarding_approve
+) VALUES (
+    3, '{"roles": ["admin"]}'::jsonb, 1, 'active', 'EMP001',
+    NULL, 1, 'active', 'permanent', 3,
+    '09:00:00', '18:00:00', false, NULL,
+    NULL, 1, 21, 'pending'
+);
+
+-- Step 8: policy
+INSERT INTO public.policy (
+    id, name, description, is_mandatory, applicable_to, effective_from,
+    created_by_id, status, document_url
+) VALUES (
+    38, 'Absent', 'Velit officiis magn', true, 'Ea quo explicabo Si', '2025-06-12',
+    3, 'active', NULL
+);
+
+-- Step 9: surveys
+INSERT INTO public.surveys (
+    id, survey_name, priority, group_by, survey_type,
+    created_by_id, company_id, department_id, status
+) VALUES
+(1, 'Customer Satisfaction Survey', 'High', 'Department', 'Feedback', 3, 1, 21, NULL),
+(3, 'Customer Credit check Survey', 'High', 'Department', 'Feedback', 3, 1, 21, NULL);
+
+INSERT INTO loan_types (
+  name,
+  description,
+  max_amount,
+  interest_rate,
+  duration_months,
+  created_at,
+  updated_at
+)
+VALUES
+  (
+    'Car Loan',
+    'Loan offered for purchasing vehicles',
+    100000,       -- Example max amount
+    3.50,         -- Example interest rate (%)
+    60,           -- Example duration in months
+    NOW(),
+    NOW()
+  ),
+  (
+    'Personal Loan',
+    'Unsecured loan for personal use',
+    50000,
+    4.75,
+    36,
+    NOW(),
+    NOW()
+  ),
+  (
+    'Family Loan',
+    'Loan extended for family support purposes',
+    30000,
+    2.95,
+    24,
+    NOW(),
+    NOW()
+  );

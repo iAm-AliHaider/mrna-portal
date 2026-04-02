@@ -1,0 +1,4163 @@
+CREATE OR REPLACE FUNCTION public.get_onboarding_tasks_by_department()
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT jsonb_agg(
+           jsonb_build_object(
+             'department', name,
+             'tasks', tasks_json
+           )
+         )
+  FROM (
+    SELECT 
+      name,
+      jsonb_agg(
+        jsonb_build_object(
+          'id', id,
+          'description', description,
+          'status', status
+        ) ORDER BY id
+      ) AS tasks_json
+    FROM tasks
+    WHERE task_type = 'on_boarding'
+    GROUP BY name
+    ORDER BY name
+  ) AS grouped;
+$function$
+
+
+
+
+CREATE OR REPLACE FUNCTION public.get_onboarding_tasks_by_department()
+ RETURNS jsonb
+ LANGUAGE sql
+ STABLE
+AS $function$
+  SELECT jsonb_agg(
+           jsonb_build_object(
+             'department', name,
+             'tasks', tasks_json
+           )
+         )
+  FROM (
+    SELECT 
+      name,
+      jsonb_agg(
+        jsonb_build_object(
+          'id', id,
+          'description', description,
+          'status', status
+        ) ORDER BY id
+      ) AS tasks_json
+    FROM tasks
+    WHERE task_type = 'on_boarding'
+    GROUP BY name
+    ORDER BY name
+  ) AS grouped;
+$function$
+
+CREATE OR REPLACE FUNCTION public.get_punctuality_report(p_year integer DEFAULT NULL::integer, p_month integer DEFAULT NULL::integer, p_employee_id integer DEFAULT NULL::integer, p_name_search text DEFAULT NULL::text, p_limit integer DEFAULT 10, p_offset integer DEFAULT 0)
+ RETURNS TABLE(employee_id integer, employee_code text, full_name text, total_on_days text, total_lates bigint, score_out_of_5 numeric, from_month_year text, to_month_year text, overall_count bigint)
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+DECLARE
+  _year_int       INTEGER;
+  _month_int      INTEGER;
+  _start_date     DATE;
+  _end_date       DATE;
+  _total_weekdays INTEGER;
+BEGIN
+  --------------------------------------------------------------------------------
+  -- 1) Default to current year/month if no arguments provided
+  --------------------------------------------------------------------------------
+  IF p_year IS NULL THEN
+    _year_int := EXTRACT(YEAR FROM CURRENT_DATE)::INT;
+  ELSE
+    _year_int := p_year;
+  END IF;
+
+  IF p_month IS NULL THEN
+    _month_int := EXTRACT(MONTH FROM CURRENT_DATE)::INT;
+  ELSE
+    _month_int := p_month;
+  END IF;
+
+  -- 2) Compute firstâ€day and lastâ€day of that month
+  _start_date := MAKE_DATE(_year_int, _month_int, 1);
+  _end_date   := (_start_date + INTERVAL '1 MONTH')::DATE - 1;  
+  -- e.g. if month=12, this yields 2024-12-31
+
+  --------------------------------------------------------------------------------
+  -- 3) Count how many â€œworkdaysâ€ (Monâ†’Fri) exist in that month
+  --------------------------------------------------------------------------------
+  SELECT COUNT(*)
+    INTO _total_weekdays
+    FROM GENERATE_SERIES(_start_date, _end_date, '1 day') AS g(day_dt)
+   WHERE EXTRACT(ISODOW FROM g.day_dt) < 6;  -- ISODOW: 1=Mon .. 5=Fri
+
+  --------------------------------------------------------------------------------
+  -- 4) Build the filtered employee set, then join logs, then aggregate
+  --------------------------------------------------------------------------------
+  RETURN QUERY
+    WITH filtered_emps AS (
+      SELECT
+        e.id                        AS employee_id,
+        e.employee_code             AS employee_code,
+        c.first_name,
+        c.second_name,
+        c.third_name,
+        c.forth_name,
+        CONCAT_WS(
+          ' ',
+          c.first_name,
+          c.second_name,
+          c.third_name,
+          c.forth_name
+        )                            AS full_name,
+        e.shift_start_time          AS shift_start_time,
+        e.shift_end_time            AS shift_end_time,
+        et.rules                     AS employment_rule
+      FROM public.employees e
+      JOIN public.candidates c
+        ON c.id = e.candidate_id
+      LEFT JOIN public.employment_types et
+        ON et.id = e.employment_type_id
+      WHERE
+        -- (a) If p_employee_id is supplied, only that employee; otherwise all
+        ( p_employee_id IS NULL OR e.id = p_employee_id )
+        AND
+        -- (b) If name search is supplied, filter by concatenated full name
+        ( p_name_search IS NULL
+          OR CONCAT_WS(
+               ' ',
+               c.first_name,
+               c.second_name,
+               c.third_name,
+               c.forth_name
+             ) ILIKE '%' || p_name_search || '%' )
+    ),
+
+    logs_in_month AS (
+      SELECT
+        dl.employee_id,
+        dl.date           AS log_date,
+        dl.check_in_time,
+        dl.check_out_time
+      FROM public.daily_attendance_logs dl
+      WHERE dl.date BETWEEN _start_date AND _end_date
+        AND EXTRACT(ISODOW FROM dl.date) < 6  -- only Monâ†’Fri
+    ),
+
+    emp_logs AS (
+      SELECT
+        fe.employee_id,
+        fe.employee_code,
+        fe.full_name,
+        fe.shift_start_time,
+        fe.shift_end_time,
+        fe.employment_rule,
+        lm.log_date,
+        lm.check_in_time,
+        lm.check_out_time
+      FROM filtered_emps fe
+      LEFT JOIN logs_in_month lm
+        ON lm.employee_id = fe.employee_id
+    ),
+
+    aggregated AS (
+      SELECT
+        el.employee_id,
+        el.employee_code,
+        el.full_name,
+
+        -- 4a) Count distinct dates where the employee actually checked in
+        COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL)
+          AS cnt_present,
+
+        -- 4b) Count â€œlateâ€ days: check_in_time > shift_start_time + 15 minutes
+        COUNT(*) FILTER (
+          WHERE el.check_in_time IS NOT NULL
+            AND el.shift_start_time IS NOT NULL
+            AND (el.check_in_time - el.shift_start_time) > INTERVAL '00:15:00'
+        ) AS total_lates,
+
+        -- 4c) Build â€œtotal_on_daysâ€ as TEXT, appending â€œ(with rules)â€ or â€œ(without rules)â€
+        CASE
+          WHEN el.employment_rule = 'company_management' THEN
+            TO_CHAR(
+              COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL),
+              'FM9990'
+            ) || ' (with rules)'
+          WHEN el.employment_rule = 'self_management' THEN
+            TO_CHAR(
+              COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL),
+              'FM9990'
+            ) || ' (without rules)'
+          ELSE
+            -- If employment_rule is NULL or something else, just show number
+            TO_CHAR(
+              COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL),
+              'FM9990'
+            )
+        END AS total_on_days,
+
+        -- 4d) Compute â€œscore_out_of_5â€ = ((present_days â€“ total_lates)/workdays) Ã— 5, rounded to one decimal
+        CASE
+          WHEN _total_weekdays = 0 THEN 0.0
+          ELSE
+            ROUND(
+              (
+                ( COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL)
+                  -
+                  COUNT(*) FILTER (
+                    WHERE el.check_in_time IS NOT NULL
+                      AND el.shift_start_time IS NOT NULL
+                      AND (el.check_in_time - el.shift_start_time) > INTERVAL '00:15:00'
+                  )
+                )::NUMERIC
+                / _total_weekdays::NUMERIC
+              ) * 5.0
+            , 1 )
+        END AS score_out_of_5,
+
+        -- 4e) â€œFrom Dateâ€ and â€œTo Dateâ€ as text â€œMonth / YYYYâ€
+        TO_CHAR(_start_date, 'TMMonth / YYYY') AS from_month_year,
+        TO_CHAR(_end_date,   'TMMonth / YYYY') AS to_month_year,
+
+        -- 4f) Window function to compute total row count across all employees (for pagination)
+        COUNT(*) OVER() AS overall_count
+      FROM emp_logs el
+      GROUP BY
+        el.employee_id,
+        el.employee_code,
+        el.full_name,
+        el.shift_start_time,
+        el.shift_end_time,
+        el.employment_rule
+    )
+
+    SELECT
+      a.employee_id,
+      a.employee_code,
+      a.full_name,
+      a.total_on_days,
+      a.total_lates,
+      a.score_out_of_5,
+      a.from_month_year,
+      a.to_month_year,
+      a.overall_count
+    FROM aggregated a
+    ORDER BY a.full_name
+    LIMIT p_limit
+    OFFSET p_offset;
+END;
+$function$
+
+
+
+CREATE OR REPLACE FUNCTION public.get_punctuality_report_month(p_year integer DEFAULT NULL::integer, p_month integer DEFAULT NULL::integer, p_employee_id integer DEFAULT NULL::integer, p_name_search text DEFAULT NULL::text, p_limit integer DEFAULT 10, p_offset integer DEFAULT 0)
+ RETURNS TABLE(employee_id integer, employee_code text, full_name text, total_on_days text, total_lates bigint, score_out_of_5 numeric, from_month_year text, to_month_year text, overall_count bigint)
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+
+DECLARE
+
+  _year_int       INTEGER;
+
+  _month_int      INTEGER;
+
+  _start_date     DATE;
+
+  _end_date       DATE;
+
+  _total_weekdays INTEGER;
+
+BEGIN
+
+  --------------------------------------------------------------------------------
+
+  -- 1) Determine â€œtarget year/monthâ€:
+
+  --    If p_year/p_month are NULL, default to the previous calendar month.
+
+  --------------------------------------------------------------------------------
+
+  IF p_year IS NULL OR p_month IS NULL THEN
+
+    -- Get the first day of the *current* month:
+
+    _year_int := EXTRACT(YEAR FROM CURRENT_DATE)::INT;
+
+    _month_int := EXTRACT(MONTH FROM CURRENT_DATE)::INT;
+
+    -- Roll back one month:
+
+    IF _month_int = 1 THEN
+
+      _year_int := _year_int - 1;
+
+      _month_int := 12;
+
+    ELSE
+
+      _month_int := _month_int - 1;
+
+    END IF;
+
+  ELSE
+
+    _year_int  := p_year;
+
+    _month_int := p_month;
+
+  END IF;
+
+
+
+  -- 2) Compute the firstâ€day and lastâ€day of that target month:
+
+  _start_date := MAKE_DATE(_year_int, _month_int, 1);
+
+  _end_date   := (_start_date + INTERVAL '1 MONTH')::DATE - 1;
+
+
+
+  --------------------------------------------------------------------------------
+
+  -- 3) Count how many â€œworkdaysâ€ (Monâ†’Fri) exist in that month
+
+  --------------------------------------------------------------------------------
+
+  SELECT COUNT(*)
+
+    INTO _total_weekdays
+
+    FROM GENERATE_SERIES(_start_date, _end_date, '1 day') AS g(day_dt)
+
+   WHERE EXTRACT(ISODOW FROM g.day_dt) < 6;  -- ISODOW: 1=Mon .. 5=Fri
+
+
+
+  --------------------------------------------------------------------------------
+
+  -- 4) Build the filtered-employee set, join logs_in_month, then aggregate
+
+  --------------------------------------------------------------------------------
+
+  RETURN QUERY
+
+    WITH filtered_emps AS (
+
+      SELECT
+
+        e.id               AS employee_id,
+
+        e.employee_code    AS employee_code,
+
+        c.first_name,
+
+        c.second_name,
+
+        c.third_name,
+
+        c.forth_name,
+
+        CONCAT_WS(
+
+          ' ',
+
+          c.first_name,
+
+          c.second_name,
+
+          c.third_name,
+
+          c.forth_name
+
+        )                   AS full_name,
+
+        e.shift_start_time AS shift_start_time,
+
+        e.shift_end_time   AS shift_end_time,
+
+        et.rules           AS employment_rule
+
+      FROM public.employees e
+
+      JOIN public.candidates c
+
+        ON c.id = e.candidate_id
+
+      LEFT JOIN public.employment_types et
+
+        ON et.id = e.employment_type_id
+
+      WHERE
+
+        -- (a) If p_employee_id is supplied, only that employee; otherwise all
+
+        ( p_employee_id IS NULL OR e.id = p_employee_id )
+
+        AND
+
+        -- (b) If name search is supplied, filter by concatenated full name
+
+        ( p_name_search IS NULL
+
+          OR CONCAT_WS(
+
+               ' ',
+
+               c.first_name,
+
+               c.second_name,
+
+               c.third_name,
+
+               c.forth_name
+
+             ) ILIKE '%' || p_name_search || '%' )
+
+    ),
+
+
+
+    logs_in_month AS (
+
+      SELECT
+
+        dl.employee_id,
+
+        dl.date           AS log_date,
+
+        dl.check_in_time,
+
+        dl.check_out_time
+
+      FROM public.daily_attendance_logs dl
+
+      WHERE dl.date BETWEEN _start_date AND _end_date
+
+        AND EXTRACT(ISODOW FROM dl.date) < 6  -- only Monâ†’Fri
+
+    ),
+
+
+
+    emp_logs AS (
+
+      SELECT
+
+        fe.employee_id,
+
+        fe.employee_code,
+
+        fe.full_name,
+
+        fe.shift_start_time,
+
+        fe.shift_end_time,
+
+        fe.employment_rule,
+
+        lm.log_date,
+
+        lm.check_in_time,
+
+        lm.check_out_time
+
+      FROM filtered_emps fe
+
+      LEFT JOIN logs_in_month lm
+
+        ON lm.employee_id = fe.employee_id
+
+    ),
+
+
+
+    aggregated AS (
+
+      SELECT
+
+        el.employee_id,
+
+        el.employee_code,
+
+        el.full_name,
+
+
+
+        -- 4a) Count distinct dates where the employee actually checked in
+
+        COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL)
+
+          AS cnt_present,
+
+
+
+        -- 4b) Count â€œlateâ€ days:
+
+        --     check_in_time > shift_start_time + 15 minutes
+
+        COUNT(*) FILTER (
+
+          WHERE el.check_in_time IS NOT NULL
+
+            AND el.shift_start_time IS NOT NULL
+
+            AND (el.check_in_time - el.shift_start_time) > INTERVAL '00:15:00'
+
+        ) AS total_lates,
+
+
+
+        -- 4c) Build â€œtotal_on_daysâ€ as TEXT, appending â€œ(with rules)â€ or â€œ(without rules)â€
+
+        CASE
+
+          WHEN el.employment_rule = 'company_management' THEN
+
+            TO_CHAR(
+
+              COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL),
+
+              'FM9990'
+
+            ) || ' (with rules)'
+
+          WHEN el.employment_rule = 'self_management' THEN
+
+            TO_CHAR(
+
+              COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL),
+
+              'FM9990'
+
+            ) || ' (without rules)'
+
+          ELSE
+
+            -- If employment_rule is NULL or something else, just show the number
+
+            TO_CHAR(
+
+              COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL),
+
+              'FM9990'
+
+            )
+
+        END AS total_on_days,
+
+
+
+        -- 4d) Compute â€œscore_out_of_5â€:
+
+        --      ((present_days â€“ total_lates) / workdays) Ã— 5, rounded to one decimal
+
+        CASE
+
+          WHEN _total_weekdays = 0 THEN 0.0
+
+          ELSE
+
+            ROUND(
+
+              (
+
+                ( COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL)
+
+                  -
+
+                  COUNT(*) FILTER (
+
+                    WHERE el.check_in_time IS NOT NULL
+
+                      AND el.shift_start_time IS NOT NULL
+
+                      AND (el.check_in_time - el.shift_start_time) > INTERVAL '00:15:00'
+
+                  )
+
+                )::NUMERIC
+
+                / _total_weekdays::NUMERIC
+
+              ) * 5.0
+
+            , 1 )
+
+        END AS score_out_of_5,
+
+
+
+        -- 4e) â€œFrom Dateâ€ and â€œTo Dateâ€ as text â€œMonth / YYYYâ€
+
+        TO_CHAR(_start_date, 'TMMonth / YYYY') AS from_month_year,
+
+        TO_CHAR(_end_date,   'TMMonth / YYYY') AS to_month_year,
+
+
+
+        -- 4f) Window function for total row count (for pagination)
+
+        COUNT(*) OVER() AS overall_count
+
+      FROM emp_logs el
+
+      GROUP BY
+
+        el.employee_id,
+
+        el.employee_code,
+
+        el.full_name,
+
+        el.shift_start_time,
+
+        el.shift_end_time,
+
+        el.employment_rule
+
+    )
+
+
+
+    SELECT
+
+      a.employee_id,
+
+      a.employee_code,
+
+      a.full_name,
+
+      a.total_on_days,
+
+      a.total_lates,
+
+      a.score_out_of_5,
+
+      a.from_month_year,
+
+      a.to_month_year,
+
+      a.overall_count
+
+    FROM aggregated a
+
+    ORDER BY a.full_name
+
+    LIMIT p_limit
+
+    OFFSET p_offset;
+
+END;
+
+$function$
+
+
+
+
+
+
+CREATE OR REPLACE FUNCTION public.get_date_wise_attendance_transactions(p_employee_id integer DEFAULT NULL::integer, p_code_search text DEFAULT NULL::text, p_name_search text DEFAULT NULL::text, p_limit integer DEFAULT 10, p_offset integer DEFAULT 0)
+ RETURNS TABLE(employee_id integer, employee_code text, full_name text, designation_name text, check_in_time time without time zone, check_out_time time without time zone, break_start_time time without time zone, break_end_time time without time zone, break_availed interval, time_in_office interval, work_time interval, late_time interval, overtime interval, informed boolean, informed_early_exit boolean, overtime_approved boolean, attendance_date date, created_at timestamp with time zone, overall_count bigint)
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+
+BEGIN
+
+  -------------------------------------------------------------------
+
+  -- 1) We start from daily_attendance_logs (innerâ€joined to employees),
+
+  --    because we only want rows that actually exist in the logs table.
+
+  -- 2) We filter by employee_id, code substring, or name substring if provided.
+
+  -- 3) We pull in each logâ€™s stored intervals (break_availed, time_in_office)
+
+  -- 4) We compute work_time = time_in_office â€“ break_availed
+
+  -- 5) We compute late_time & overtime from shift_start/end
+
+  -- 6) We order by created_at DESC (newest log first)
+
+  -- 7) We windowâ€count all matching rows into overall_count
+
+  -------------------------------------------------------------------
+
+  RETURN QUERY
+
+    WITH 
+
+    -- A) â€œfiltered_empsâ€ collects employees matching ID / code / name filters
+
+    filtered_emps AS (
+
+      SELECT
+
+        e.id AS employee_id,
+
+        e.employee_code,
+
+        d.name         AS designation_name,
+
+        CONCAT_WS(
+
+          ' ',
+
+          c.first_name,
+
+          c.second_name,
+
+          c.third_name,
+
+          c.forth_name
+
+        )               AS full_name,
+
+        e.shift_start_time,
+
+        e.shift_end_time
+
+      FROM public.employees e
+
+      JOIN public.candidates c
+
+        ON c.id = e.candidate_id
+
+      LEFT JOIN public.designations d
+
+        ON d.id = e.designation_type
+
+      WHERE
+
+        ( p_employee_id IS NULL OR e.id = p_employee_id )
+
+        AND
+
+        ( p_code_search IS NULL 
+
+          OR e.employee_code ILIKE '%' || p_code_search || '%' )
+
+        AND
+
+        ( p_name_search IS NULL 
+
+          OR CONCAT_WS(
+
+               ' ',
+
+               c.first_name,
+
+               c.second_name,
+
+               c.third_name,
+
+               c.forth_name
+
+             ) ILIKE '%' || p_name_search || '%' )
+
+    ),
+
+
+
+    -- B) â€œjoined_logsâ€ pairs each matching employee with each of their log rows
+
+    joined_logs AS (
+
+      SELECT
+
+        fe.employee_id,
+
+        fe.employee_code,
+
+        fe.full_name,
+
+        fe.designation_name,
+
+        fe.shift_start_time,
+
+        fe.shift_end_time,
+
+        dl.date            AS attendance_date,
+
+        dl.created_at      AS created_at,
+
+        dl.check_in_time,
+
+        dl.check_out_time,
+
+        dl.break_start_time,
+
+        dl.break_end_time,
+
+        dl.break_availed,
+
+        dl.time_in_office,
+
+        dl.informed,
+
+        dl.informed_early_exit,
+
+        dl.overtime_approved
+
+      FROM filtered_emps fe
+
+      JOIN public.daily_attendance_logs dl
+
+        ON dl.employee_id = fe.employee_id
+
+    ),
+
+
+
+    -- C) â€œcomputedâ€ does the interval math and â€œlateâ€/â€œovertimeâ€ calc
+
+    computed AS (
+
+      SELECT
+
+        jl.employee_id,
+
+        jl.employee_code,
+
+        jl.full_name,
+
+        jl.designation_name,
+
+        jl.attendance_date,
+
+        jl.check_in_time,
+
+        jl.check_out_time,
+
+        jl.break_start_time,
+
+        jl.break_end_time,
+
+        -- already stored in table:
+
+        jl.break_availed,
+
+        jl.time_in_office,
+
+        -- compute work_time:
+
+        CASE
+
+          WHEN jl.time_in_office IS NULL 
+
+            OR jl.break_availed IS NULL 
+
+            THEN NULL
+
+          ELSE (jl.time_in_office - jl.break_availed)::interval
+
+        END AS work_time,
+
+        -- compute late_time = GREATEST(check_in_time - shift_start_time, '00:00:00')
+
+        CASE
+
+          WHEN jl.check_in_time    IS NULL 
+
+            OR jl.shift_start_time IS NULL 
+
+            THEN NULL
+
+          ELSE GREATEST(
+
+                 (jl.check_in_time - jl.shift_start_time),
+
+                 '00:00:00'
+
+               )::interval
+
+        END AS late_time,
+
+        -- compute overtime = GREATEST(check_out_time - shift_end_time, '00:00:00')
+
+        CASE
+
+          WHEN jl.check_out_time   IS NULL 
+
+            OR jl.shift_end_time   IS NULL 
+
+            THEN NULL
+
+          ELSE GREATEST(
+
+                 (jl.check_out_time - jl.shift_end_time),
+
+                 '00:00:00'
+
+               )::interval
+
+        END AS overtime,
+
+        jl.informed,
+
+        jl.informed_early_exit,
+
+        jl.overtime_approved,
+
+        jl.created_at
+
+      FROM joined_logs jl
+
+    ),
+
+
+
+    -- D) Number & paginate, while also capturing total matching row count
+
+    numbered AS (
+
+      SELECT
+
+        c.*,
+
+        COUNT(*) OVER () AS overall_count
+
+      FROM computed c
+
+      ORDER BY c.created_at DESC, c.employee_code
+
+      LIMIT p_limit
+
+      OFFSET p_offset
+
+    )
+
+
+
+    SELECT
+
+      n.employee_id,
+
+      n.employee_code,
+
+      n.full_name,
+
+      n.designation_name,
+
+      n.check_in_time,
+
+      n.check_out_time,
+
+      n.break_start_time,
+
+      n.break_end_time,
+
+      n.break_availed,
+
+      n.time_in_office,
+
+      n.work_time,
+
+      n.late_time,
+
+      n.overtime,
+
+      n.informed,
+
+      n.informed_early_exit,
+
+      n.overtime_approved,
+
+      n.attendance_date,
+
+      n.created_at,
+
+      n.overall_count
+
+    FROM numbered n;
+
+END;
+
+$function$
+
+
+
+
+
+
+
+
+
+CREATE OR REPLACE FUNCTION public.get_date_wise_attendance_transactions(p_employee_id integer DEFAULT NULL::integer, p_code_search text DEFAULT NULL::text, p_name_search text DEFAULT NULL::text, p_limit integer DEFAULT 10, p_offset integer DEFAULT 0)
+ RETURNS TABLE(employee_id integer, employee_code text, full_name text, designation_name text, check_in_time time without time zone, check_out_time time without time zone, break_start_time time without time zone, break_end_time time without time zone, break_availed interval, time_in_office interval, work_time interval, late_time interval, overtime interval, informed boolean, informed_early_exit boolean, overtime_approved boolean, attendance_date date, created_at timestamp with time zone, overall_count bigint)
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+
+BEGIN
+
+  -------------------------------------------------------------------
+
+  -- 1) We start from daily_attendance_logs (innerâ€joined to employees),
+
+  --    because we only want rows that actually exist in the logs table.
+
+  -- 2) We filter by employee_id, code substring, or name substring if provided.
+
+  -- 3) We pull in each logâ€™s stored intervals (break_availed, time_in_office)
+
+  -- 4) We compute work_time = time_in_office â€“ break_availed
+
+  -- 5) We compute late_time & overtime from shift_start/end
+
+  -- 6) We order by created_at DESC (newest log first)
+
+  -- 7) We windowâ€count all matching rows into overall_count
+
+  -------------------------------------------------------------------
+
+  RETURN QUERY
+
+    WITH 
+
+    -- A) â€œfiltered_empsâ€ collects employees matching ID / code / name filters
+
+    filtered_emps AS (
+
+      SELECT
+
+        e.id AS employee_id,
+
+        e.employee_code,
+
+        d.name         AS designation_name,
+
+        CONCAT_WS(
+
+          ' ',
+
+          c.first_name,
+
+          c.second_name,
+
+          c.third_name,
+
+          c.forth_name
+
+        )               AS full_name,
+
+        e.shift_start_time,
+
+        e.shift_end_time
+
+      FROM public.employees e
+
+      JOIN public.candidates c
+
+        ON c.id = e.candidate_id
+
+      LEFT JOIN public.designations d
+
+        ON d.id = e.designation_type
+
+      WHERE
+
+        ( p_employee_id IS NULL OR e.id = p_employee_id )
+
+        AND
+
+        ( p_code_search IS NULL 
+
+          OR e.employee_code ILIKE '%' || p_code_search || '%' )
+
+        AND
+
+        ( p_name_search IS NULL 
+
+          OR CONCAT_WS(
+
+               ' ',
+
+               c.first_name,
+
+               c.second_name,
+
+               c.third_name,
+
+               c.forth_name
+
+             ) ILIKE '%' || p_name_search || '%' )
+
+    ),
+
+
+
+    -- B) â€œjoined_logsâ€ pairs each matching employee with each of their log rows
+
+    joined_logs AS (
+
+      SELECT
+
+        fe.employee_id,
+
+        fe.employee_code,
+
+        fe.full_name,
+
+        fe.designation_name,
+
+        fe.shift_start_time,
+
+        fe.shift_end_time,
+
+        dl.date            AS attendance_date,
+
+        dl.created_at      AS created_at,
+
+        dl.check_in_time,
+
+        dl.check_out_time,
+
+        dl.break_start_time,
+
+        dl.break_end_time,
+
+        dl.break_availed,
+
+        dl.time_in_office,
+
+        dl.informed,
+
+        dl.informed_early_exit,
+
+        dl.overtime_approved
+
+      FROM filtered_emps fe
+
+      JOIN public.daily_attendance_logs dl
+
+        ON dl.employee_id = fe.employee_id
+
+    ),
+
+
+
+    -- C) â€œcomputedâ€ does the interval math and â€œlateâ€/â€œovertimeâ€ calc
+
+    computed AS (
+
+      SELECT
+
+        jl.employee_id,
+
+        jl.employee_code,
+
+        jl.full_name,
+
+        jl.designation_name,
+
+        jl.attendance_date,
+
+        jl.check_in_time,
+
+        jl.check_out_time,
+
+        jl.break_start_time,
+
+        jl.break_end_time,
+
+        -- already stored in table:
+
+        jl.break_availed,
+
+        jl.time_in_office,
+
+        -- compute work_time:
+
+        CASE
+
+          WHEN jl.time_in_office IS NULL 
+
+            OR jl.break_availed IS NULL 
+
+            THEN NULL
+
+          ELSE (jl.time_in_office - jl.break_availed)::interval
+
+        END AS work_time,
+
+        -- compute late_time = GREATEST(check_in_time - shift_start_time, '00:00:00')
+
+        CASE
+
+          WHEN jl.check_in_time    IS NULL 
+
+            OR jl.shift_start_time IS NULL 
+
+            THEN NULL
+
+          ELSE GREATEST(
+
+                 (jl.check_in_time - jl.shift_start_time),
+
+                 '00:00:00'
+
+               )::interval
+
+        END AS late_time,
+
+        -- compute overtime = GREATEST(check_out_time - shift_end_time, '00:00:00')
+
+        CASE
+
+          WHEN jl.check_out_time   IS NULL 
+
+            OR jl.shift_end_time   IS NULL 
+
+            THEN NULL
+
+          ELSE GREATEST(
+
+                 (jl.check_out_time - jl.shift_end_time),
+
+                 '00:00:00'
+
+               )::interval
+
+        END AS overtime,
+
+        jl.informed,
+
+        jl.informed_early_exit,
+
+        jl.overtime_approved,
+
+        jl.created_at
+
+      FROM joined_logs jl
+
+    ),
+
+
+
+    -- D) Number & paginate, while also capturing total matching row count
+
+    numbered AS (
+
+      SELECT
+
+        c.*,
+
+        COUNT(*) OVER () AS overall_count
+
+      FROM computed c
+
+      ORDER BY c.created_at DESC, c.employee_code
+
+      LIMIT p_limit
+
+      OFFSET p_offset
+
+    )
+
+
+
+    SELECT
+
+      n.employee_id,
+
+      n.employee_code,
+
+      n.full_name,
+
+      n.designation_name,
+
+      n.check_in_time,
+
+      n.check_out_time,
+
+      n.break_start_time,
+
+      n.break_end_time,
+
+      n.break_availed,
+
+      n.time_in_office,
+
+      n.work_time,
+
+      n.late_time,
+
+      n.overtime,
+
+      n.informed,
+
+      n.informed_early_exit,
+
+      n.overtime_approved,
+
+      n.attendance_date,
+
+      n.created_at,
+
+      n.overall_count
+
+    FROM numbered n;
+
+END;
+
+$function$
+
+
+
+
+
+CREATE OR REPLACE FUNCTION public.get_monthly_attendance_report(p_year integer, p_month integer, p_employee_id integer DEFAULT NULL::integer, p_code_search text DEFAULT NULL::text, p_offset integer DEFAULT 0, p_limit integer DEFAULT 10)
+ RETURNS TABLE(employee_id integer, employee_code text, full_name text, shift_start_time time without time zone, shift_end_time time without time zone, total_time_in_office interval, total_break_availed interval, total_overtime interval, total_dates bigint, overall_count bigint)
+ LANGUAGE plpgsql
+ SECURITY DEFINER
+AS $function$
+
+DECLARE
+
+    _counts RECORD;
+
+BEGIN
+
+    /* â€¦ count step remains the same â€¦ */
+
+
+
+    SELECT
+
+      COUNT(DISTINCT l.employee_id) AS cnt
+
+    INTO _counts
+
+    FROM daily_attendance_logs AS l
+
+    JOIN employees AS e ON e.id = l.employee_id
+
+    WHERE
+
+        date_part('year', l.date)  = p_year
+
+      AND date_part('month', l.date) = p_month
+
+      AND (p_employee_id IS NULL OR l.employee_id = p_employee_id)
+
+      AND (
+
+           p_code_search IS NULL
+
+        OR e.employee_code ILIKE ('%' || p_code_search || '%')
+
+      );
+
+
+
+    RETURN QUERY
+
+    SELECT
+
+      e.id                                    AS employee_id,
+
+      e.employee_code                         AS employee_code,
+
+      COALESCE(
+
+        c.first_name || ' ' || c.second_name || ' ' || c.third_name,
+
+        ''                                     )           AS full_name,
+
+      e.shift_start_time                      AS shift_start_time,
+
+      e.shift_end_time                        AS shift_end_time,
+
+      COALESCE( SUM(l.time_in_office), '00:00:00'::interval )       AS total_time_in_office,
+
+      COALESCE( SUM(l.break_availed),    '00:00:00'::interval )     AS total_break_availed,
+
+      COALESCE( SUM(l.overtime),         '00:00:00'::interval )     AS total_overtime,
+
+      COUNT(DISTINCT l.date)               AS total_dates,          -- â† now matches bigint
+
+      _counts.cnt                           AS overall_count
+
+    FROM
+
+      daily_attendance_logs AS l
+
+      JOIN employees AS e ON e.id = l.employee_id
+
+      LEFT JOIN candidates AS c ON c.id = e.candidate_id
+
+    WHERE
+
+        date_part('year', l.date)  = p_year
+
+      AND date_part('month', l.date) = p_month
+
+      AND (p_employee_id IS NULL OR l.employee_id = p_employee_id)
+
+      AND (
+
+           p_code_search IS NULL
+
+        OR e.employee_code ILIKE ('%' || p_code_search || '%')
+
+      )
+
+    GROUP BY
+
+      e.id,
+
+      e.employee_code,
+
+      c.first_name, c.second_name, c.third_name,
+
+      e.shift_start_time, e.shift_end_time,
+
+      _counts.cnt
+
+    ORDER BY
+
+      e.employee_code
+
+    OFFSET p_offset
+
+    LIMIT  p_limit;
+
+END;
+
+$function$
+
+
+
+CREATE OR REPLACE FUNCTION public.get_punctuality_report_monthly(p_year integer DEFAULT NULL::integer, p_month integer DEFAULT NULL::integer, p_employee_id integer DEFAULT NULL::integer, p_name_search text DEFAULT NULL::text, p_limit integer DEFAULT 10, p_offset integer DEFAULT 0)
+ RETURNS TABLE(employee_id integer, employee_code text, full_name text, total_on_days text, total_lates bigint, score_out_of_5 numeric, from_month_year text, to_month_year text, overall_count bigint)
+ LANGUAGE plpgsql
+ STABLE
+AS $function$
+
+DECLARE
+
+  _year_int       INTEGER;
+
+  _month_int      INTEGER;
+
+  _start_date     DATE;
+
+  _end_date       DATE;
+
+  _total_weekdays INTEGER;
+
+BEGIN
+
+  --------------------------------------------------------------------------------
+
+  -- 1) Determine â€œtarget year/monthâ€:
+
+  --    If p_year/p_month are NULL, default to the previous calendar month.
+
+  --------------------------------------------------------------------------------
+
+  IF p_year IS NULL OR p_month IS NULL THEN
+
+    -- Get the first day of the *current* month:
+
+    _year_int := EXTRACT(YEAR FROM CURRENT_DATE)::INT;
+
+    _month_int := EXTRACT(MONTH FROM CURRENT_DATE)::INT;
+
+    -- Roll back one month:
+
+    IF _month_int = 1 THEN
+
+      _year_int := _year_int - 1;
+
+      _month_int := 12;
+
+    ELSE
+
+      _month_int := _month_int - 1;
+
+    END IF;
+
+  ELSE
+
+    _year_int  := p_year;
+
+    _month_int := p_month;
+
+  END IF;
+
+
+
+  -- 2) Compute the firstâ€day and lastâ€day of that target month:
+
+  _start_date := MAKE_DATE(_year_int, _month_int, 1);
+
+  _end_date   := (_start_date + INTERVAL '1 MONTH')::DATE - 1;
+
+
+
+  --------------------------------------------------------------------------------
+
+  -- 3) Count how many â€œworkdaysâ€ (Monâ†’Fri) exist in that month
+
+  --------------------------------------------------------------------------------
+
+  SELECT COUNT(*)
+
+    INTO _total_weekdays
+
+    FROM GENERATE_SERIES(_start_date, _end_date, '1 day') AS g(day_dt)
+
+   WHERE EXTRACT(ISODOW FROM g.day_dt) < 6;  -- ISODOW: 1=Mon .. 5=Fri
+
+
+
+  --------------------------------------------------------------------------------
+
+  -- 4) Build the filtered-employee set, join logs_in_month, then aggregate
+
+  --------------------------------------------------------------------------------
+
+  RETURN QUERY
+
+    WITH filtered_emps AS (
+
+      SELECT
+
+        e.id               AS employee_id,
+
+        e.employee_code    AS employee_code,
+
+        c.first_name,
+
+        c.second_name,
+
+        c.third_name,
+
+        c.forth_name,
+
+        CONCAT_WS(
+
+          ' ',
+
+          c.first_name,
+
+          c.second_name,
+
+          c.third_name,
+
+          c.forth_name
+
+        )                   AS full_name,
+
+        e.shift_start_time AS shift_start_time,
+
+        e.shift_end_time   AS shift_end_time,
+
+        et.rules           AS employment_rule
+
+      FROM public.employees e
+
+      JOIN public.candidates c
+
+        ON c.id = e.candidate_id
+
+      LEFT JOIN public.employment_types et
+
+        ON et.id = e.employment_type_id
+
+      WHERE
+
+        -- (a) If p_employee_id is supplied, only that employee; otherwise all
+
+        ( p_employee_id IS NULL OR e.id = p_employee_id )
+
+        AND
+
+        -- (b) If name search is supplied, filter by concatenated full name
+
+        ( p_name_search IS NULL
+
+          OR CONCAT_WS(
+
+               ' ',
+
+               c.first_name,
+
+               c.second_name,
+
+               c.third_name,
+
+               c.forth_name
+
+             ) ILIKE '%' || p_name_search || '%' )
+
+    ),
+
+
+
+    logs_in_month AS (
+
+      SELECT
+
+        dl.employee_id,
+
+        dl.date           AS log_date,
+
+        dl.check_in_time,
+
+        dl.check_out_time
+
+      FROM public.daily_attendance_logs dl
+
+      WHERE dl.date BETWEEN _start_date AND _end_date
+
+        AND EXTRACT(ISODOW FROM dl.date) < 6  -- only Monâ†’Fri
+
+    ),
+
+
+
+    emp_logs AS (
+
+      SELECT
+
+        fe.employee_id,
+
+        fe.employee_code,
+
+        fe.full_name,
+
+        fe.shift_start_time,
+
+        fe.shift_end_time,
+
+        fe.employment_rule,
+
+        lm.log_date,
+
+        lm.check_in_time,
+
+        lm.check_out_time
+
+      FROM filtered_emps fe
+
+      LEFT JOIN logs_in_month lm
+
+        ON lm.employee_id = fe.employee_id
+
+    ),
+
+
+
+    aggregated AS (
+
+      SELECT
+
+        el.employee_id,
+
+        el.employee_code,
+
+        el.full_name,
+
+
+
+        -- 4a) Count distinct dates where the employee actually checked in
+
+        COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL)
+
+          AS cnt_present,
+
+
+
+        -- 4b) Count â€œlateâ€ days:
+
+        --     check_in_time > shift_start_time + 15 minutes
+
+        COUNT(*) FILTER (
+
+          WHERE el.check_in_time IS NOT NULL
+
+            AND el.shift_start_time IS NOT NULL
+
+            AND (el.check_in_time - el.shift_start_time) > INTERVAL '00:15:00'
+
+        ) AS total_lates,
+
+
+
+        -- 4c) Build â€œtotal_on_daysâ€ as TEXT, appending â€œ(with rules)â€ or â€œ(without rules)â€
+
+        CASE
+
+          WHEN el.employment_rule = 'company_management' THEN
+
+            TO_CHAR(
+
+              COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL),
+
+              'FM9990'
+
+            ) || ' (with rules)'
+
+          WHEN el.employment_rule = 'self_management' THEN
+
+            TO_CHAR(
+
+              COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL),
+
+              'FM9990'
+
+            ) || ' (without rules)'
+
+          ELSE
+
+            -- If employment_rule is NULL or something else, just show the number
+
+            TO_CHAR(
+
+              COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL),
+
+              'FM9990'
+
+            )
+
+        END AS total_on_days,
+
+
+
+        -- 4d) Compute â€œscore_out_of_5â€:
+
+        --      ((present_days â€“ total_lates) / workdays) Ã— 5, rounded to one decimal
+
+        CASE
+
+          WHEN _total_weekdays = 0 THEN 0.0
+
+          ELSE
+
+            ROUND(
+
+              (
+
+                ( COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL)
+
+                  -
+
+                  COUNT(*) FILTER (
+
+                    WHERE el.check_in_time IS NOT NULL
+
+                      AND el.shift_start_time IS NOT NULL
+
+                      AND (el.check_in_time - el.shift_start_time) > INTERVAL '00:15:00'
+
+                  )
+
+                )::NUMERIC
+
+                / _total_weekdays::NUMERIC
+
+              ) * 5.0
+
+            , 1 )
+
+        END AS score_out_of_5,
+
+
+
+        -- 4e) â€œFrom Dateâ€ and â€œTo Dateâ€ as text â€œMonth / YYYYâ€
+
+        TO_CHAR(_start_date, 'TMMonth / YYYY') AS from_month_year,
+
+        TO_CHAR(_end_date,   'TMMonth / YYYY') AS to_month_year,
+
+
+
+        -- 4f) Window function for total row count (for pagination)
+
+        COUNT(*) OVER() AS overall_count
+
+      FROM emp_logs el
+
+      GROUP BY
+
+        el.employee_id,
+
+        el.employee_code,
+
+        el.full_name,
+
+        el.shift_start_time,
+
+        el.shift_end_time,
+
+        el.employment_rule
+
+    )
+
+
+
+    SELECT
+
+      a.employee_id,
+
+      a.employee_code,
+
+      a.full_name,
+
+      a.total_on_days,
+
+      a.total_lates,
+
+      a.score_out_of_5,
+
+      a.from_month_year,
+
+      a.to_month_year,
+
+      a.overall_count
+
+    FROM aggregated a
+
+    ORDER BY a.full_name
+
+    LIMIT p_limit
+
+    OFFSET p_offset;
+
+END;
+
+$function$
+
+
+
+
+
+CREATE OR REPLACE FUNCTION public.get_weekly_attendance_register(p_week_start date DEFAULT NULL::date, p_employee_id integer DEFAULT NULL::integer, p_code_search text DEFAULT NULL::text, p_name_search text DEFAULT NULL::text, p_limit integer DEFAULT 10, p_offset integer DEFAULT 0)
+ RETURNS TABLE(employee_id integer, employee_code text, full_name text, designation_name text, sun_col text, mon_col text, tue_col text, wed_col text, thu_col text, fri_col text, sat_col text, overall_count bigint)
+ LANGUAGE plpgsql
+AS $function$
+
+DECLARE
+
+  _week_start_sunday DATE;
+
+BEGIN
+
+  -- 1) Compute â€œthis weekâ€™s Sundayâ€ if not provided:
+
+  IF p_week_start IS NULL THEN
+
+    _week_start_sunday := current_date - extract(dow FROM current_date)::INT;
+
+  ELSE
+
+    _week_start_sunday := p_week_start;
+
+  END IF;
+
+
+
+  -------------------------------------------------------------------------
+
+  -- 2) Build the CTE chain including optional p_employee_id filter:
+
+  -------------------------------------------------------------------------
+
+  RETURN QUERY
+
+  WITH filtered_emps AS (
+
+    SELECT
+
+      e.id                AS employee_id,
+
+      e.employee_code     AS employee_code,
+
+      d.name              AS designation_name,
+
+      CONCAT_WS(
+
+        ' ',
+
+        c.first_name,
+
+        c.second_name,
+
+        c.third_name,
+
+        c.forth_name
+
+      )                    AS full_name
+
+    FROM employees e
+
+    JOIN candidates c
+
+      ON c.id = e.candidate_id
+
+    LEFT JOIN designations d
+
+      ON d.id = e.designation_type
+
+    WHERE
+
+      -- 2A) If p_employee_id IS NOT NULL, only that employee; otherwise include all
+
+      (p_employee_id IS NULL OR e.id = p_employee_id)
+
+      AND
+
+      -- 2B) Filter by code substring if provided
+
+      (p_code_search IS NULL OR e.employee_code ILIKE '%' || p_code_search || '%')
+
+      AND
+
+      -- 2C) Filter by name substring if provided
+
+      (p_name_search IS NULL
+
+       OR CONCAT_WS(' ',
+
+            c.first_name,
+
+            c.second_name,
+
+            c.third_name,
+
+            c.forth_name
+
+          ) ILIKE '%' || p_name_search || '%')
+
+  ),
+
+
+
+  emp_week AS (
+
+    SELECT
+
+      fe.employee_id,
+
+      fe.employee_code,
+
+      fe.full_name,
+
+      fe.designation_name,
+
+      gs AS log_date
+
+    FROM filtered_emps fe
+
+    CROSS JOIN LATERAL (
+
+      SELECT generate_series(
+
+        _week_start_sunday,
+
+        _week_start_sunday + 6,
+
+        '1 day'::interval
+
+      )::date AS gs
+
+    ) AS daily
+
+  ),
+
+
+
+  logs_joined AS (
+
+    SELECT
+
+      ew.employee_id,
+
+      ew.employee_code,
+
+      ew.full_name,
+
+      ew.designation_name,
+
+      ew.log_date,
+
+      dl.check_in_time,
+
+      dl.check_out_time,
+
+      dl.time_in_office,
+
+      dl.late_time,
+
+      dl.overtime
+
+    FROM emp_week ew
+
+    LEFT JOIN daily_attendance_logs dl
+
+      ON dl.employee_id = ew.employee_id
+
+     AND dl.date        = ew.log_date
+
+  ),
+
+
+
+  logs_with_display AS (
+
+    SELECT
+
+      lj.employee_id,
+
+      lj.employee_code,
+
+      lj.full_name,
+
+      lj.designation_name,
+
+      lj.log_date,
+
+      CASE
+
+        -- 2D) If the log_date is in the future, display â€œâ€“â€
+
+        WHEN lj.log_date > current_date THEN '-'
+
+        -- 2E) If no check_in_time and itâ€™s today or past, display â€œOFFâ€
+
+        WHEN lj.check_in_time IS NULL THEN 'OFF'
+
+        ELSE
+
+          'I:' || TO_CHAR(lj.check_in_time, 'HH24:MI')
+
+          || '; O:' || TO_CHAR(lj.check_out_time, 'HH24:MI')
+
+          || '; W:' || TO_CHAR(lj.time_in_office, 'HH24:MI:SS')
+
+          || '; L:' || COALESCE(TO_CHAR(lj.late_time, 'HH24:MI:SS'), '00:00:00')
+
+      END AS day_display
+
+    FROM logs_joined lj
+
+  ),
+
+
+
+  pivoted AS (
+
+    SELECT
+
+      lwd.employee_id,
+
+      lwd.employee_code,
+
+      lwd.full_name,
+
+      lwd.designation_name,
+
+      MAX(CASE WHEN EXTRACT(dow FROM log_date) = 0 THEN day_display END) AS sun_col,
+
+      MAX(CASE WHEN EXTRACT(dow FROM log_date) = 1 THEN day_display END) AS mon_col,
+
+      MAX(CASE WHEN EXTRACT(dow FROM log_date) = 2 THEN day_display END) AS tue_col,
+
+      MAX(CASE WHEN EXTRACT(dow FROM log_date) = 3 THEN day_display END) AS wed_col,
+
+      MAX(CASE WHEN EXTRACT(dow FROM log_date) = 4 THEN day_display END) AS thu_col,
+
+      MAX(CASE WHEN EXTRACT(dow FROM log_date) = 5 THEN day_display END) AS fri_col,
+
+      MAX(CASE WHEN EXTRACT(dow FROM log_date) = 6 THEN day_display END) AS sat_col
+
+    FROM logs_with_display lwd
+
+    GROUP BY
+
+      lwd.employee_id,
+
+      lwd.employee_code,
+
+      lwd.full_name,
+
+      lwd.designation_name
+
+  ),
+
+
+
+  counted AS (
+
+    SELECT
+
+      p.*,
+
+      COUNT(*) OVER() AS overall_count
+
+    FROM pivoted p
+
+    ORDER BY p.employee_code
+
+    LIMIT p_limit
+
+    OFFSET p_offset
+
+  )
+
+
+
+  SELECT
+
+    c.employee_id,
+
+    c.employee_code,
+
+    c.full_name,
+
+    c.designation_name,
+
+    c.sun_col,
+
+    c.mon_col,
+
+    c.tue_col,
+
+    c.wed_col,
+
+    c.thu_col,
+
+    c.fri_col,
+
+    c.sat_col,
+
+    c.overall_count
+
+  FROM counted c;
+
+END;
+
+$function$
+
+
+
+
+
+CREATE OR REPLACE FUNCTION public.get_daily_attendance_transactions(p_date date DEFAULT NULL::date, p_full_name text DEFAULT NULL::text, p_code_search text DEFAULT NULL::text, p_employee_id integer DEFAULT NULL::integer, p_limit integer DEFAULT 10, p_offset integer DEFAULT 0)
+ RETURNS TABLE(employee_id integer, employee_code text, full_name text, check_in_time time without time zone, check_out_time time without time zone, time_in_office interval, break_availed interval, work_time interval, late_time interval, overtime interval, informed boolean, informed_early_exit boolean, overtime_approved boolean, overall_count bigint)
+ LANGUAGE plpgsql
+AS $function$
+
+BEGIN
+
+  RETURN QUERY
+
+  WITH daily_logs AS (
+
+    SELECT
+
+      dl.employee_id,
+
+      e.employee_code,
+
+      CONCAT_WS(' ',
+
+        c.first_name,
+
+        c.second_name,
+
+        c.third_name,
+
+        c.forth_name
+
+      ) AS full_name,
+
+      dl.check_in_time,
+
+      dl.check_out_time,
+
+      dl.time_in_office,
+
+      dl.break_availed,
+
+      dl.work_time,
+
+      dl.late_time,
+
+      dl.overtime,
+
+      dl.informed,
+
+      dl.informed_early_exit,
+
+      dl.overtime_approved
+
+    FROM public.daily_attendance_logs dl
+
+    JOIN public.employees e
+
+      ON e.id = dl.employee_id
+
+    JOIN public.candidates c
+
+      ON c.id = e.candidate_id
+
+    WHERE
+
+      dl.date = p_date
+
+      AND (p_code_search IS NULL OR e.employee_code ILIKE '%' || p_code_search || '%')
+
+      AND (p_employee_id IS NULL OR dl.employee_id = p_employee_id)
+
+        AND (
+
+    p_full_name IS NULL
+
+    OR CONCAT_WS(
+
+         ' ',
+
+         c.first_name,
+
+         c.second_name,
+
+         c.third_name,
+
+         c.forth_name
+
+      ) ILIKE '%' || p_full_name || '%'
+
+  )
+
+  ),
+
+  counted AS (
+
+    SELECT
+
+      *,
+
+      COUNT(*) OVER() AS overall_count
+
+    FROM daily_logs
+
+    ORDER BY employee_code
+
+    LIMIT p_limit
+
+    OFFSET p_offset
+
+  )
+
+  SELECT
+
+    employee_id,
+
+    employee_code,
+
+    full_name,
+
+    check_in_time,
+
+    check_out_time,
+
+    time_in_office,
+
+    break_availed,
+
+    work_time,
+
+    late_time,
+
+    overtime,
+
+    informed,
+
+    informed_early_exit,
+
+    overtime_approved,
+
+    overall_count
+
+  FROM counted;
+
+END;
+
+$function$
+
+
+
+CREATE OR REPLACE FUNCTION public.get_my_announcements(
+  p_employee_id     INTEGER,
+  p_company_id      INTEGER    DEFAULT NULL,
+  p_search          TEXT       DEFAULT NULL,
+  p_limit           INT        DEFAULT 10,
+  p_offset          INT        DEFAULT 0
+)
+RETURNS TABLE (
+  announcement_id     INTEGER,
+  status              TEXT,
+  reference_no        TEXT,
+  title               TEXT,
+  active_date         DATE,
+  expiry_date         DATE,
+  announcement_status TEXT,
+  created_by_id       INTEGER,
+  created_by_name     TEXT,
+  attachment_path     TEXT,
+  is_mandatory        BOOLEAN,
+  for_organization    BOOLEAN,
+  read_status         TEXT,
+  is_liked            BOOLEAN,
+  overall_count       BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  _dept_id INTEGER;
+BEGIN
+  -- find this user’s department
+  SELECT organizational_unit_id
+    INTO _dept_id
+    FROM public.employees
+   WHERE id = p_employee_id;
+
+  RETURN QUERY
+    WITH filtered AS (
+      SELECT
+        a.id                   AS announcement_id,
+        a.status,
+        a.reference_no,
+        a.title,
+        a.active_date,
+        a.expiry_date,
+        CASE
+          WHEN a.expiry_date IS NOT NULL
+               AND a.expiry_date >= CURRENT_DATE
+            THEN 'active'
+          ELSE 'expired'
+        END                   AS announcement_status,
+        a.created_by_id,
+        CONCAT_WS(' ',
+          cb.first_name,
+          cb.second_name,
+          cb.third_name,
+          cb.forth_name
+        )                     AS created_by_name,
+        a.attachment_path,
+        a.is_mandatory,
+        a.for_organization,
+        -- determine read vs unread
+        CASE
+          WHEN EXISTS(
+            SELECT 1
+              FROM public.announcement_acknowledgements ack
+             WHERE ack.announcement_id = a.id
+               AND ack.employee_id     = p_employee_id
+               AND ack.acknowledged    = TRUE
+          ) THEN 'read'
+          ELSE 'unread'
+        END                   AS read_status,
+        -- determine liked status
+        EXISTS(
+          SELECT 1
+            FROM public.announcement_acknowledgements ack2
+           WHERE ack2.announcement_id = a.id
+             AND ack2.employee_id     = p_employee_id
+             AND ack2.is_liked        = TRUE
+        )                     AS is_liked
+      FROM public.announcements a
+      JOIN public.employees ce
+        ON ce.id = a.created_by_id
+      JOIN public.candidates cb
+        ON cb.id = ce.candidate_id
+      WHERE
+        a.active_date <= CURRENT_DATE
+        AND (p_company_id IS NULL OR a.company_id = p_company_id)
+        AND (
+          p_search IS NULL
+          OR a.title        ILIKE '%' || p_search || '%'
+          OR a.reference_no ILIKE '%' || p_search || '%'
+        )
+        AND (
+          a.for_organization = TRUE
+          OR (
+            a.for_organization = FALSE
+            AND EXISTS (
+              SELECT 1
+                FROM public.department_announcement da
+               WHERE da.announcement_id = a.id
+                 AND da.department_id   = _dept_id
+            )
+          )
+        )
+    ),
+    numbered AS (
+      SELECT
+        f.*,
+        COUNT(*) OVER() AS overall_count
+      FROM filtered f
+      ORDER BY f.active_date DESC NULLS LAST
+      LIMIT p_limit
+      OFFSET p_offset
+    )
+  SELECT
+    n.announcement_id,
+    n.status,
+    n.reference_no,
+    n.title,
+    n.active_date,
+    n.expiry_date,
+    n.announcement_status,
+    n.created_by_id,
+    n.created_by_name,
+    n.attachment_path,
+    n.is_mandatory,
+    n.for_organization,
+    n.read_status,
+    n.is_liked,
+    n.overall_count
+  FROM numbered n;
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.get_my_announcements(
+  p_employee_id     INTEGER,
+  p_company_id      INTEGER    DEFAULT NULL,
+  p_search          TEXT       DEFAULT NULL,
+  p_limit           INT        DEFAULT 10,
+  p_offset          INT        DEFAULT 0
+)
+RETURNS TABLE (
+  announcement_id     INTEGER,
+  status              TEXT,
+  reference_no        TEXT,
+  title               TEXT,
+  active_date         DATE,
+  expiry_date         DATE,
+  announcement_status TEXT,
+  created_by_id       INTEGER,
+  created_by_name     TEXT,
+  attachment_path     TEXT,
+  is_mandatory        BOOLEAN,
+  for_organization    BOOLEAN,
+  read_status         TEXT,
+  is_liked            BOOLEAN,
+  overall_count       BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  _dept_id INTEGER;
+BEGIN
+  -- find this user’s department
+  SELECT organizational_unit_id
+    INTO _dept_id
+    FROM public.employees
+   WHERE id = p_employee_id;
+
+  RETURN QUERY
+    WITH filtered AS (
+      SELECT
+        a.id                   AS announcement_id,
+        a.status,
+        a.reference_no,
+        a.title,
+        a.active_date,
+        a.expiry_date,
+        CASE
+          WHEN a.expiry_date IS NOT NULL
+               AND a.expiry_date >= CURRENT_DATE
+            THEN 'active'
+          ELSE 'expired'
+        END                   AS announcement_status,
+        a.created_by_id,
+        CONCAT_WS(' ',
+          cb.first_name,
+          cb.second_name,
+          cb.third_name,
+          cb.forth_name
+        )                     AS created_by_name,
+        a.attachment_path,
+        a.is_mandatory,
+        a.for_organization,
+        -- determine read vs unread
+        CASE
+          WHEN EXISTS(
+            SELECT 1
+              FROM public.announcement_acknowledgements ack
+             WHERE ack.announcement_id = a.id
+               AND ack.employee_id     = p_employee_id
+               AND ack.acknowledged    = TRUE
+          ) THEN 'read'
+          ELSE 'unread'
+        END                   AS read_status,
+        -- determine liked status
+        EXISTS(
+          SELECT 1
+            FROM public.announcement_acknowledgements ack2
+           WHERE ack2.announcement_id = a.id
+             AND ack2.employee_id     = p_employee_id
+             AND ack2.is_liked        = TRUE
+        )                     AS is_liked
+      FROM public.announcements a
+      JOIN public.employees ce
+        ON ce.id = a.created_by_id
+      JOIN public.candidates cb
+        ON cb.id = ce.candidate_id
+      WHERE
+        a.active_date <= CURRENT_DATE
+        AND (p_company_id IS NULL OR a.company_id = p_company_id)
+        AND (
+          p_search IS NULL
+          OR a.title        ILIKE '%' || p_search || '%'
+          OR a.reference_no ILIKE '%' || p_search || '%'
+        )
+        AND (
+          a.for_organization = TRUE
+          OR (
+            a.for_organization = FALSE
+            AND EXISTS (
+              SELECT 1
+                FROM public.department_announcement da
+               WHERE da.announcement_id = a.id
+                 AND da.department_id   = _dept_id
+            )
+          )
+        )
+    ),
+    numbered AS (
+      SELECT
+        f.*,
+        COUNT(*) OVER() AS overall_count
+      FROM filtered f
+      ORDER BY f.active_date DESC NULLS LAST
+      LIMIT p_limit
+      OFFSET p_offset
+    )
+  SELECT
+    n.announcement_id,
+    n.status,
+    n.reference_no,
+    n.title,
+    n.active_date,
+    n.expiry_date,
+    n.announcement_status,
+    n.created_by_id,
+    n.created_by_name,
+    n.attachment_path,
+    n.is_mandatory,
+    n.for_organization,
+    n.read_status,
+    n.is_liked,
+    n.overall_count
+  FROM numbered n;
+END;
+$$;
+
+
+
+CREATE OR REPLACE FUNCTION public.get_my_announcements(
+  p_employee_id     INTEGER,
+  p_company_id      INTEGER    DEFAULT NULL,
+  p_search          TEXT       DEFAULT NULL,
+  p_limit           INT        DEFAULT 10,
+  p_offset          INT        DEFAULT 0
+)
+RETURNS TABLE (
+  announcement_id     INTEGER,
+  status              TEXT,
+  reference_no        TEXT,
+  title               TEXT,
+  active_date         DATE,
+  expiry_date         DATE,
+  announcement_status TEXT,
+  created_by_id       INTEGER,
+  created_by_name     TEXT,
+  attachment_path     TEXT,
+  is_mandatory        BOOLEAN,
+  for_organization    BOOLEAN,
+  read_status         TEXT,
+  overall_count       BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  _dept_id INTEGER;
+BEGIN
+  -- find this user’s department
+  SELECT organizational_unit_id
+    INTO _dept_id
+    FROM public.employees
+   WHERE id = p_employee_id;
+
+  RETURN QUERY
+    WITH filtered AS (
+      SELECT
+        a.id                   AS announcement_id,
+        a.status,
+        a.reference_no,
+        a.title,
+        a.active_date,
+        a.expiry_date,
+        CASE
+          WHEN a.expiry_date IS NOT NULL
+               AND a.expiry_date >= CURRENT_DATE
+            THEN 'active'
+          ELSE 'expired'
+        END                   AS announcement_status,
+        a.created_by_id,
+        CONCAT_WS(' ',
+          cb.first_name,
+          cb.second_name,
+          cb.third_name,
+          cb.forth_name
+        )                     AS created_by_name,
+        a.attachment_path,
+        a.is_mandatory,
+        a.for_organization,
+        -- determine read vs unread
+        CASE
+          WHEN EXISTS(
+            SELECT 1
+              FROM public.announcement_acknowledgements ack
+             WHERE ack.announcement_id = a.id
+               AND ack.employee_id     = p_employee_id
+               AND ack.acknowledged    = TRUE
+          ) THEN 'read'
+          ELSE 'unread'
+        END                   AS read_status
+      FROM public.announcements a
+      JOIN public.employees ce
+        ON ce.id = a.created_by_id
+      JOIN public.candidates cb
+        ON cb.id = ce.candidate_id
+      WHERE
+        a.active_date <= CURRENT_DATE
+        AND (p_company_id IS NULL OR a.company_id = p_company_id)
+        AND (
+          p_search IS NULL
+          OR a.title        ILIKE '%' || p_search || '%'
+          OR a.reference_no ILIKE '%' || p_search || '%'
+        )
+        AND (
+          a.for_organization = TRUE
+          OR (
+            a.for_organization = FALSE
+            AND EXISTS (
+              SELECT 1
+                FROM public.department_announcement da
+               WHERE da.announcement_id = a.id
+                 AND da.department_id   = _dept_id
+            )
+          )
+        )
+    ),
+    numbered AS (
+      SELECT
+        f.*,
+        COUNT(*) OVER() AS overall_count
+      FROM filtered f
+      ORDER BY f.active_date DESC NULLS LAST
+      LIMIT p_limit
+      OFFSET p_offset
+    )
+  SELECT
+    n.announcement_id,
+    n.status,
+    n.reference_no,
+    n.title,
+    n.active_date,
+    n.expiry_date,
+    n.announcement_status,
+    n.created_by_id,
+    n.created_by_name,
+    n.attachment_path,
+    n.is_mandatory,
+    n.for_organization,
+    n.read_status,
+    n.overall_count
+  FROM numbered n;
+END;
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.get_my_announcements(
+  p_employee_id     INTEGER,
+  p_company_id      INTEGER    DEFAULT NULL,
+  p_search          TEXT       DEFAULT NULL,
+  p_limit           INT        DEFAULT 10,
+  p_offset          INT        DEFAULT 0,
+  p_today           DATE       DEFAULT NULL     -- new parameter
+)
+RETURNS TABLE (
+  announcement_id     INTEGER,
+  status              TEXT,
+  reference_no        TEXT,
+  title               TEXT,
+  active_date         DATE,
+  expiry_date         DATE,
+  announcement_status TEXT,
+  created_by_id       INTEGER,
+  created_by_name     TEXT,
+  attachment_path     TEXT,
+  is_mandatory        BOOLEAN,
+  for_organization    BOOLEAN,
+  read_status         TEXT,
+  is_liked            BOOLEAN,
+  overall_count       BIGINT
+)
+LANGUAGE plpgsql
+STABLE
+AS $$
+DECLARE
+  _dept_id INTEGER;
+  _today   DATE := COALESCE(p_today, NOW()::date);  -- use passed-in date or today
+BEGIN
+  -- find this user’s department
+  SELECT organizational_unit_id
+    INTO _dept_id
+    FROM public.employees
+   WHERE id = p_employee_id;
+
+  RETURN QUERY
+    WITH filtered AS (
+      SELECT
+        a.id                   AS announcement_id,
+        a.status,
+        a.reference_no,
+        a.title,
+        a.active_date,
+        a.expiry_date,
+        CASE
+          WHEN a.expiry_date::date >= _today THEN 'active'
+          ELSE 'expired'
+        END                   AS announcement_status,
+        a.created_by_id,
+        CONCAT_WS(' ',
+          cb.first_name,
+          cb.second_name,
+          cb.third_name,
+          cb.forth_name
+        )                     AS created_by_name,
+        a.attachment_path,
+        a.is_mandatory,
+        a.for_organization,
+        CASE
+          WHEN EXISTS(
+            SELECT 1
+              FROM public.announcement_acknowledgements ack
+             WHERE ack.announcement_id = a.id
+               AND ack.employee_id     = p_employee_id
+               AND ack.acknowledged    = TRUE
+          ) THEN 'read'
+          ELSE 'unread'
+        END                   AS read_status,
+        EXISTS(
+          SELECT 1
+            FROM public.announcement_acknowledgements ack2
+           WHERE ack2.announcement_id = a.id
+             AND ack2.employee_id     = p_employee_id
+             AND ack2.is_liked        = TRUE
+        )                     AS is_liked
+      FROM public.announcements a
+      JOIN public.employees ce
+        ON ce.id = a.created_by_id
+      JOIN public.candidates cb
+        ON cb.id = ce.candidate_id
+      WHERE
+        a.active_date::date <= _today
+        AND (p_company_id IS NULL OR a.company_id = p_company_id)
+        AND (
+          p_search IS NULL
+          OR a.title        ILIKE '%' || p_search || '%'
+          OR a.reference_no ILIKE '%' || p_search || '%'
+        )
+        AND (
+          a.for_organization
+          OR EXISTS (
+            SELECT 1
+              FROM public.department_announcement da
+             WHERE da.announcement_id = a.id
+               AND da.department_id   = _dept_id
+          )
+        )
+    ),
+    numbered AS (
+      SELECT
+        f.*,
+        COUNT(*) OVER() AS overall_count
+      FROM filtered f
+      ORDER BY f.active_date DESC NULLS LAST
+      LIMIT p_limit
+      OFFSET p_offset
+    )
+  SELECT
+    n.announcement_id,
+    n.status,
+    n.reference_no,
+    n.title,
+    n.active_date,
+    n.expiry_date,
+    n.announcement_status,
+    n.created_by_id,
+    n.created_by_name,
+    n.attachment_path,
+    n.is_mandatory,
+    n.for_organization,
+    n.read_status,
+    n.is_liked,
+    n.overall_count
+  FROM numbered n;
+END;
+$$;
+
+
+
+CREATE OR REPLACE FUNCTION public.get_announcement_summary(
+    p_created_by_id integer
+)
+RETURNS TABLE (
+    status TEXT,
+    non_mandatory_count bigint,
+    mandatory_count bigint
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN QUERY
+
+  -- ACTIVE: today ∈ [active_date, expiry_date]
+  SELECT
+    'active'::TEXT,
+    COUNT(*) FILTER (WHERE is_mandatory = FALSE),
+    COUNT(*) FILTER (WHERE is_mandatory = TRUE)
+  FROM public.announcements
+  WHERE (p_created_by_id IS NULL OR created_by_id = p_created_by_id)
+    AND active_date <= CURRENT_DATE
+    AND (expiry_date IS NULL OR expiry_date >= CURRENT_DATE)
+
+  UNION ALL
+
+  -- UPCOMING: active_date > today
+  SELECT
+    'upcoming'::TEXT,
+    COUNT(*) FILTER (WHERE is_mandatory = FALSE),
+    COUNT(*) FILTER (WHERE is_mandatory = TRUE)
+  FROM public.announcements
+  WHERE (p_created_by_id IS NULL OR created_by_id = p_created_by_id)
+    AND active_date > CURRENT_DATE
+
+  UNION ALL
+
+  -- EXPIRED: expiry_date < today
+  SELECT
+    'expired'::TEXT,
+    COUNT(*) FILTER (WHERE is_mandatory = FALSE),
+    COUNT(*) FILTER (WHERE is_mandatory = TRUE)
+  FROM public.announcements
+  WHERE (p_created_by_id IS NULL OR created_by_id = p_created_by_id)
+    AND expiry_date < CURRENT_DATE;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.get_unscheduled_candidates()
+  RETURNS SETOF public.candidates
+  LANGUAGE SQL
+  STABLE
+AS $$
+  SELECT c.*
+    FROM public.candidates c
+   WHERE NOT EXISTS (
+     SELECT 1
+       FROM public.scheduled_interviews si
+      WHERE si.candidate_id = c.id
+   );
+$$;
+
+
+
+CREATE OR REPLACE FUNCTION public.get_my_mandatory_announcements(
+  p_employee_id INTEGER,
+  p_company_id INTEGER
+)
+RETURNS TABLE (
+  announcement_id INTEGER,
+  status TEXT,
+  reference_no TEXT,
+  title TEXT,
+  description TEXT,
+  active_date DATE,
+  expiry_date DATE,
+  announcement_status TEXT,
+  created_by_id INTEGER,
+  created_by_name TEXT,
+  attachment_path TEXT,
+  is_mandatory BOOLEAN,
+  for_organization BOOLEAN,
+  read_status TEXT
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  _dept_id INTEGER;
+BEGIN
+  -- 1) Lookup this employee's department
+  SELECT organizational_unit_id
+    INTO _dept_id
+    FROM public.employees
+   WHERE id = p_employee_id;
+
+  -- 2) Return all passed‐activation, mandatory announcements NOT yet acknowledged
+  RETURN QUERY
+    SELECT
+      a.id AS announcement_id,
+      a.status,
+      a.reference_no,
+      a.title,
+      a.description,
+      a.active_date,
+      a.expiry_date,
+      CASE
+        WHEN a.expiry_date IS NOT NULL AND a.expiry_date >= CURRENT_DATE
+        THEN 'active'
+        ELSE 'expired'
+      END AS announcement_status,
+      a.created_by_id,
+      CONCAT_WS(' ', cb.first_name, cb.second_name, cb.third_name, cb.forth_name) AS created_by_name,
+      a.attachment_path,
+      a.is_mandatory,
+      a.for_organization,
+      CASE
+        WHEN EXISTS (
+          SELECT 1
+          FROM public.announcement_acknowledgements ack
+          WHERE ack.announcement_id = a.id
+            AND ack.employee_id = p_employee_id
+            AND ack.acknowledged = TRUE
+        ) THEN 'read'
+        ELSE 'unread'
+      END AS read_status
+    FROM public.announcements a
+    JOIN public.employees ce ON ce.id = a.created_by_id
+    JOIN public.candidates cb ON cb.id = ce.candidate_id
+    WHERE
+      a.active_date <= CURRENT_DATE
+      AND a.is_mandatory = TRUE
+      AND NOT EXISTS (
+        SELECT 1
+        FROM public.announcement_acknowledgements ack
+        WHERE ack.announcement_id = a.id
+          AND ack.employee_id = p_employee_id
+      )
+      AND (p_company_id IS NULL OR a.company_id = p_company_id)
+      AND (
+        a.for_organization = TRUE
+        OR (
+          a.for_organization = FALSE
+          AND EXISTS (
+            SELECT 1
+            FROM public.department_announcement da
+            WHERE da.announcement_id = a.id
+              AND da.department_id = _dept_id
+          )
+        )
+      )
+    ORDER BY a.active_date DESC NULLS LAST;
+END;
+$$;
+
+
+
+
+CREATE OR REPLACE FUNCTION public.get_offboarding_requests(
+  p_employment_type_ids integer[],
+  p_status text,
+  p_search text,
+  p_offset integer,
+  p_limit integer
+)
+RETURNS TABLE (
+  id integer,
+  termination_date date,
+  reason text,
+  status text,
+  created_by integer,
+  created_at timestamp with time zone,
+  updated_at timestamp with time zone,
+  employee jsonb
+)
+LANGUAGE sql
+AS $$
+  SELECT
+    r.id,
+    r.termination_date,
+    r.reason,
+    r.status,
+    r.created_by,
+    r.created_at,
+    r.updated_at,
+    jsonb_build_object(
+      'id',    e.id,
+      'code',  e.employee_code,
+      'unitId', e.organizational_unit_id,
+      'candidate', jsonb_build_object(
+         'id',         c.id,
+         'first_name', c.first_name,
+         'family_name',c.family_name
+      )
+    ) AS employee
+  FROM public.offboarding_requests r
+  JOIN public.employees e ON e.id = r.employee_id
+  JOIN public.candidates c ON c.id = e.candidate_id
+  WHERE r.is_deleted = FALSE
+    AND e.employment_type_id = ANY(p_employment_type_ids)
+    AND (
+      p_status IS NULL
+      OR r.status = p_status
+    )
+    AND (
+      p_search IS NULL
+      OR (
+        r.reason ILIKE '%' || p_search || '%'
+        OR c.first_name ILIKE '%' || p_search || '%'
+        OR c.family_name ILIKE '%' || p_search || '%'
+      )
+    )
+  ORDER BY r.created_at DESC
+  OFFSET p_offset
+  LIMIT  p_limit;
+$$;
+
+
+
+
+
+
+
+CREATE OR REPLACE FUNCTION public.get_offboarding_requests_filtered_by_first_name(
+  p_first_name TEXT,
+  p_status TEXT,
+  p_employment_type_ids INTEGER[],
+  p_from INTEGER,
+  p_to INTEGER,
+  p_created_by INTEGER
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+  result JSONB;
+BEGIN
+  SELECT jsonb_agg(t)
+  INTO result
+  FROM (
+    SELECT
+      r.*,
+      jsonb_build_object(
+        'employee', jsonb_build_object(
+          'details', to_jsonb(e),
+          'candidate', to_jsonb(c)
+        )
+      ) AS employee_info
+    FROM public.offboarding_requests r
+    INNER JOIN public.employees e ON e.id = r.employee_id
+    INNER JOIN public.candidates c ON c.id = e.candidate_id
+    WHERE r.is_deleted = FALSE
+      AND (p_status IS NULL OR r.status = p_status)
+      AND (p_employment_type_ids IS NULL OR e.employment_type_id = ANY(p_employment_type_ids))
+      AND (p_first_name IS NULL OR c.first_name ILIKE '%' || p_first_name || '%')
+      AND (p_created_by IS NULL OR r.created_by = p_created_by)
+    ORDER BY r.created_at DESC
+    OFFSET p_from
+    LIMIT (p_to - p_from + 1)
+  ) t;
+
+  RETURN COALESCE(result, '[]'::jsonb);
+END;
+$function$;
+
+
+CREATE OR REPLACE FUNCTION public.get_offboarding_tasks_by_department()
+RETURNS jsonb
+LANGUAGE sql
+AS $function$
+  SELECT jsonb_agg(
+           jsonb_build_object(
+             'department', name,
+             'tasks', tasks_json
+           )
+         )
+  FROM (
+    SELECT 
+      name,
+      jsonb_agg(
+        jsonb_build_object(
+          'id', id,
+          'description', description,
+          'status', status
+        ) ORDER BY id
+      ) AS tasks_json
+    FROM public.tasks
+    WHERE task_type = 'off_boarding'
+    GROUP BY name
+    ORDER BY name
+  ) AS grouped;
+$function$;
+
+
+
+CREATE OR REPLACE FUNCTION public.get_punctuality_report(
+  p_year integer,
+  p_month integer,
+  p_employee_id integer,
+  p_name_search text,
+  p_limit integer,
+  p_offset integer
+)
+RETURNS TABLE (
+  employee_id integer,
+  employee_code text,
+  full_name text,
+  total_on_days text,
+  total_lates integer,
+  score_out_of_5 numeric,
+  from_month_year text,
+  to_month_year text,
+  overall_count integer
+)
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+  _year_int       INTEGER;
+  _month_int      INTEGER;
+  _start_date     DATE;
+  _end_date       DATE;
+  _total_weekdays INTEGER;
+BEGIN
+  -- 1) Default to current year/month if not provided
+  _year_int := COALESCE(p_year, EXTRACT(YEAR FROM CURRENT_DATE)::INT);
+  _month_int := COALESCE(p_month, EXTRACT(MONTH FROM CURRENT_DATE)::INT);
+
+  -- 2) Calculate start and end of the month
+  _start_date := MAKE_DATE(_year_int, _month_int, 1);
+  _end_date := (_start_date + INTERVAL '1 month')::DATE - 1;
+
+  -- 3) Count weekdays (Mon-Fri)
+  SELECT COUNT(*)
+    INTO _total_weekdays
+    FROM GENERATE_SERIES(_start_date, _end_date, INTERVAL '1 day') AS g(day_dt)
+    WHERE EXTRACT(ISODOW FROM g.day_dt) < 6;
+
+  -- 4) Compute result
+  RETURN QUERY
+  WITH filtered_emps AS (
+    SELECT
+      e.id AS employee_id,
+      e.employee_code,
+      c.first_name,
+      c.second_name,
+      c.third_name,
+      c.forth_name,
+      CONCAT_WS(' ', c.first_name, c.second_name, c.third_name, c.forth_name) AS full_name,
+      e.shift_start_time,
+      e.shift_end_time,
+      et.rules AS employment_rule
+    FROM public.employees e
+    JOIN public.candidates c ON c.id = e.candidate_id
+    LEFT JOIN public.employment_types et ON et.id = e.employment_type_id
+    WHERE
+      (p_employee_id IS NULL OR e.id = p_employee_id) AND
+      (p_name_search IS NULL OR CONCAT_WS(' ', c.first_name, c.second_name, c.third_name, c.forth_name) ILIKE '%' || p_name_search || '%')
+  ),
+  logs_in_month AS (
+    SELECT
+      dl.employee_id,
+      dl.date AS log_date,
+      dl.check_in_time,
+      dl.check_out_time
+    FROM public.daily_attendance_logs dl
+    WHERE dl.date BETWEEN _start_date AND _end_date
+      AND EXTRACT(ISODOW FROM dl.date) < 6
+  ),
+  emp_logs AS (
+    SELECT
+      fe.employee_id,
+      fe.employee_code,
+      fe.full_name,
+      fe.shift_start_time,
+      fe.shift_end_time,
+      fe.employment_rule,
+      lm.log_date,
+      lm.check_in_time,
+      lm.check_out_time
+    FROM filtered_emps fe
+    LEFT JOIN logs_in_month lm ON lm.employee_id = fe.employee_id
+  ),
+  aggregated AS (
+    SELECT
+      el.employee_id,
+      el.employee_code,
+      el.full_name,
+      COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL) AS cnt_present,
+      COUNT(*) FILTER (
+        WHERE el.check_in_time IS NOT NULL
+          AND el.shift_start_time IS NOT NULL
+          AND (el.check_in_time - el.shift_start_time) > INTERVAL '00:15:00'
+      ) AS total_lates,
+      CASE
+        WHEN el.employment_rule = 'company_management' THEN
+          TO_CHAR(COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL), 'FM9990') || ' (with rules)'
+        WHEN el.employment_rule = 'self_management' THEN
+          TO_CHAR(COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL), 'FM9990') || ' (without rules)'
+        ELSE
+          TO_CHAR(COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL), 'FM9990')
+      END AS total_on_days,
+      CASE
+        WHEN _total_weekdays = 0 THEN 0.0
+        ELSE ROUND(((COUNT(DISTINCT el.log_date) FILTER (WHERE el.check_in_time IS NOT NULL) -
+          COUNT(*) FILTER (
+            WHERE el.check_in_time IS NOT NULL
+              AND el.shift_start_time IS NOT NULL
+              AND (el.check_in_time - el.shift_start_time) > INTERVAL '00:15:00'
+          ))::NUMERIC / _total_weekdays::NUMERIC) * 5.0, 1)
+      END AS score_out_of_5,
+      TO_CHAR(_start_date, 'TMMonth / YYYY') AS from_month_year,
+      TO_CHAR(_end_date,   'TMMonth / YYYY') AS to_month_year,
+      COUNT(*) OVER () AS overall_count
+    FROM emp_logs el
+    GROUP BY el.employee_id, el.employee_code, el.full_name, el.shift_start_time, el.shift_end_time, el.employment_rule
+  )
+  SELECT
+    a.employee_id,
+    a.employee_code,
+    a.full_name,
+    a.total_on_days,
+    a.total_lates,
+    a.score_out_of_5,
+    a.from_month_year,
+    a.to_month_year,
+    a.overall_count
+  FROM aggregated a
+  ORDER BY a.full_name
+  LIMIT p_limit
+  OFFSET p_offset;
+END;
+$function$;
+
+
+
+CREATE OR REPLACE FUNCTION get_scheduled_second_interviews(
+    search_term TEXT DEFAULT NULL,
+    page_limit INT DEFAULT 10,
+    page_offset INT DEFAULT 0
+)
+RETURNS JSONB AS $$
+DECLARE
+    total_count_variable INT;
+    candidates_variable JSONB;
+BEGIN
+    -- Count total
+    SELECT COUNT(*) INTO total_count_variable
+    FROM candidates c
+    LEFT JOIN scheduled_interviews si ON c.id = si.candidate_id
+    WHERE 
+        c.is_deleted = FALSE AND
+        si.is_first_interview_scheduled = TRUE AND
+        si.is_second_interview_scheduled = TRUE AND
+        si.note_two IS NULL AND
+        si.note_one IS NOT NULL AND
+        (
+            search_term IS NULL
+            OR c.first_name ILIKE '%' || search_term || '%'
+        );
+
+    -- Fetch paginated records with nested scheduled_interview
+    SELECT jsonb_agg(row_data) INTO candidates_variable
+    FROM (
+        SELECT 
+            to_jsonb(c) || jsonb_build_object('scheduled_interview', to_jsonb(si)) AS row_data
+        FROM candidates c
+        LEFT JOIN scheduled_interviews si ON c.id = si.candidate_id
+        WHERE 
+            c.is_deleted = FALSE AND
+            si.is_first_interview_scheduled = TRUE AND
+            si.is_second_interview_scheduled = TRUE AND
+            si.note_two IS NULL AND
+            si.note_one IS NOT NULL AND
+            (
+                search_term IS NULL
+                OR c.first_name ILIKE '%' || search_term || '%'
+            )
+        ORDER BY c.id
+        LIMIT page_limit OFFSET page_offset
+    ) sub;
+
+    -- Return final object
+    RETURN jsonb_build_object(
+        'count', COALESCE(total_count_variable, 0),
+        'candidates', COALESCE(candidates_variable, '[]'::jsonb)
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+CREATE OR REPLACE FUNCTION get_organizational_unit_hierarchy()
+RETURNS JSONB AS $$
+DECLARE
+    hierarchy_result JSONB;
+BEGIN
+    WITH RECURSIVE org_tree AS (
+        SELECT 
+            ou.*, 
+            NULL::INTEGER AS parent, 
+            0 AS depth
+        FROM organizational_units ou
+        WHERE ou.parent_id IS NULL
+
+        UNION ALL
+
+        SELECT 
+            child.*, 
+            child.parent_id AS parent, 
+            ot.depth + 1
+        FROM organizational_units child
+        JOIN org_tree ot ON child.parent_id = ot.id
+    ),
+    tree_json AS (
+        SELECT 
+            ot.*,
+            (
+                SELECT jsonb_agg(to_jsonb(child_row))
+                FROM (
+                    SELECT 
+                        to_jsonb(child) || jsonb_build_object('children', '[]'::jsonb) AS child_row
+                    FROM org_tree child
+                    WHERE child.parent_id = ot.id
+                ) child_list
+            ) AS children
+        FROM org_tree ot
+    )
+    SELECT jsonb_agg(to_jsonb(row) || jsonb_build_object('children', COALESCE(children, '[]'::jsonb)))
+    INTO hierarchy_result
+    FROM tree_json row
+    WHERE row.parent IS NULL;
+
+    RETURN COALESCE(hierarchy_result, '[]'::jsonb);
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+
+CREATE OR REPLACE FUNCTION get_interviews_for_employee(
+    employee_id INT,
+    search_term TEXT DEFAULT NULL,
+    page_limit INT DEFAULT 10,
+    page_offset INT DEFAULT 0
+)
+RETURNS JSONB AS $$
+DECLARE
+    total_count_variable INT;
+    interviews_variable JSONB;
+BEGIN
+    -- Count total interviews for the given employee
+    SELECT COUNT(*) INTO total_count_variable
+    FROM employees e
+    JOIN scheduled_interviews si
+      ON si.interviewer_id = e.id
+         OR si.second_interviewer_id = e.id
+         OR si.third_interviewer_id = e.id
+         OR si.first_interview_panel_member_one_id  = employee_id
+OR si.first_interview_panel_member_two_id  = employee_id
+    JOIN candidates cand ON cand.id = si.candidate_id
+    WHERE 
+        e.id = employee_id AND
+        (
+            search_term IS NULL
+            OR cand.first_name ILIKE '%' || search_term || '%'
+        );
+
+    -- Get paginated results with nested candidate info
+    SELECT jsonb_agg(row_data) INTO interviews_variable
+    FROM (
+        SELECT 
+            to_jsonb(si) || jsonb_build_object('candidate', to_jsonb(cand)) AS row_data
+        FROM employees e
+        JOIN scheduled_interviews si
+          ON si.interviewer_id = e.id
+             OR si.second_interviewer_id = e.id
+             OR si.third_interviewer_id = e.id
+         OR si.first_interview_panel_member_one_id  = employee_id
+OR si.first_interview_panel_member_two_id  = employee_id
+        JOIN candidates cand ON cand.id = si.candidate_id
+        WHERE 
+            e.id = employee_id AND
+            (
+                search_term IS NULL
+                OR cand.first_name ILIKE '%' || search_term || '%'
+            )
+        ORDER BY si.id DESC
+        LIMIT page_limit OFFSET page_offset
+    ) sub;
+
+    RETURN jsonb_build_object(
+        'count', COALESCE(total_count_variable, 0),
+        'interviews', COALESCE(interviews_variable, '[]'::jsonb)
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+CREATE OR REPLACE FUNCTION get_scheduled_first_interviews(
+    search_term TEXT DEFAULT NULL,
+    page_limit INT DEFAULT 10,
+    page_offset INT DEFAULT 0
+)
+RETURNS JSONB AS $$
+
+DECLARE
+    total_count_variable INT;
+    candidates_variable JSONB;
+BEGIN
+    -- Count total matching records
+    SELECT COUNT(*) INTO total_count_variable
+    FROM candidates c
+    LEFT JOIN scheduled_interviews si ON c.id = si.candidate_id
+    WHERE 
+        c.is_deleted = FALSE AND
+        si.first_interview_time IS NOT NULL AND
+        si.note_one IS NULL AND
+        (
+            search_term IS NULL
+            OR c.first_name ILIKE '%' || search_term || '%'
+        );
+
+    -- Paginated result with si nested
+    SELECT jsonb_agg(row_data) INTO candidates_variable
+    FROM (
+        SELECT 
+            to_jsonb(c) || jsonb_build_object('scheduled_interview', to_jsonb(si)) AS row_data
+        FROM candidates c
+        LEFT JOIN scheduled_interviews si ON c.id = si.candidate_id
+        WHERE 
+            c.is_deleted = FALSE AND
+            si.first_interview_time IS NOT NULL AND
+            si.note_one IS NULL AND
+            (
+                search_term IS NULL
+                OR c.first_name ILIKE '%' || search_term || '%'
+            )
+        ORDER BY c.id
+        LIMIT page_limit OFFSET page_offset
+    ) sub;
+
+    -- Return final JSON object
+    RETURN jsonb_build_object(
+        'count', COALESCE(total_count_variable, 0),
+        'candidates', COALESCE(candidates_variable, '[]'::jsonb)
+    );
+END;
+
+$$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE FUNCTION get_unscheduled_first_interviews(
+    search_term TEXT DEFAULT NULL,
+    page_limit INT DEFAULT 10,
+    page_offset INT DEFAULT 0
+)
+RETURNS JSONB AS $$
+
+DECLARE
+    total_count_variable INT;
+    candidates_variable JSONB;
+BEGIN
+    -- Get total count
+    SELECT COUNT(*) INTO total_count_variable
+    FROM candidates
+    WHERE id NOT IN (
+        SELECT candidate_id
+        FROM scheduled_interviews
+        WHERE is_deleted = false
+    )
+    AND is_deleted = false
+    AND is_employee = false
+    AND (
+        search_term IS NULL
+        OR first_name ILIKE '%' || search_term || '%'
+    );
+
+    -- Get paginated results
+    SELECT jsonb_agg(to_jsonb(c)) INTO candidates_variable
+    FROM (
+        SELECT *
+        FROM candidates
+        WHERE id NOT IN (
+            SELECT candidate_id
+            FROM scheduled_interviews
+            WHERE is_deleted = false
+        )
+        AND is_deleted = false
+        AND is_employee = false
+        AND (
+            search_term IS NULL
+            OR first_name ILIKE '%' || search_term || '%'
+        )
+        ORDER BY id
+        LIMIT page_limit OFFSET page_offset
+    ) c;
+
+    RETURN jsonb_build_object(
+        'count', COALESCE(total_count_variable, 0),
+        'candidates', COALESCE(candidates_variable, '[]'::jsonb)
+    );
+END;
+
+$$ LANGUAGE plpgsql;
+
+
+
+CREATE OR REPLACE FUNCTION get_unscheduled_second_interviews(
+    search_term TEXT DEFAULT NULL,
+    page_limit INT DEFAULT 10,
+    page_offset INT DEFAULT 0
+)
+RETURNS JSONB AS $$
+
+DECLARE
+    total_count_variable INT;
+    candidates_variable JSONB;
+BEGIN
+    -- Count total
+    SELECT COUNT(*) INTO total_count_variable
+    FROM candidates c
+    LEFT JOIN scheduled_interviews si ON c.id = si.candidate_id
+    WHERE 
+        c.is_deleted = FALSE AND
+        si.is_first_interview_scheduled = TRUE AND
+        si.is_second_interview_scheduled = FALSE AND
+        si.note_two IS NULL AND
+        si.note_one IS NOT NULL AND
+        (
+            search_term IS NULL
+            OR c.first_name ILIKE '%' || search_term || '%'
+        );
+
+    -- Fetch paginated records with nested scheduled_interview
+    SELECT jsonb_agg(row_data) INTO candidates_variable
+    FROM (
+        SELECT 
+            to_jsonb(c) || jsonb_build_object('scheduled_interview', to_jsonb(si)) AS row_data
+        FROM candidates c
+        LEFT JOIN scheduled_interviews si ON c.id = si.candidate_id
+        WHERE 
+            c.is_deleted = FALSE AND
+            si.is_first_interview_scheduled = TRUE AND
+            si.is_second_interview_scheduled = FALSE AND
+            si.note_two IS NULL AND
+            si.note_one IS NOT NULL AND
+            (
+                search_term IS NULL
+                OR c.first_name ILIKE '%' || search_term || '%'
+            )
+        ORDER BY c.id
+        LIMIT page_limit OFFSET page_offset
+    ) sub;
+
+    -- Return final object
+    RETURN jsonb_build_object(
+        'count', COALESCE(total_count_variable, 0),
+        'candidates', COALESCE(candidates_variable, '[]'::jsonb)
+    );
+END;
+$$ LANGUAGE plpgsql;
+
+
+
+CREATE OR REPLACE FUNCTION get_scheduled_third_interviews(
+    search_term TEXT DEFAULT NULL,
+    page_limit INT DEFAULT 10,
+    page_offset INT DEFAULT 0
+)
+RETURNS JSONB AS $$
+
+DECLARE
+    total_count_variable INT;
+    candidates_variable JSONB;
+BEGIN
+    -- Count total
+    SELECT COUNT(*) INTO total_count_variable
+    FROM candidates c
+    LEFT JOIN scheduled_interviews si ON c.id = si.candidate_id
+    WHERE 
+        c.is_deleted = FALSE AND
+        si.is_first_interview_scheduled = TRUE AND
+        si.is_second_interview_scheduled = TRUE AND
+        si.is_third_interview_scheduled = TRUE AND
+        si.note_three IS NULL AND
+        si.note_two IS NOT NULL AND
+        (
+            search_term IS NULL
+            OR c.first_name ILIKE '%' || search_term || '%'
+        );
+
+    -- Fetch paginated records with nested scheduled_interview
+    SELECT jsonb_agg(row_data) INTO candidates_variable
+    FROM (
+        SELECT 
+            to_jsonb(c) || jsonb_build_object('scheduled_interview', to_jsonb(si)) AS row_data
+        FROM candidates c
+        LEFT JOIN scheduled_interviews si ON c.id = si.candidate_id
+        WHERE 
+            c.is_deleted = FALSE AND
+            si.is_first_interview_scheduled = TRUE AND
+            si.is_second_interview_scheduled = TRUE AND
+            si.is_third_interview_scheduled = TRUE AND
+            si.note_three IS NULL AND
+            si.note_two IS NOT NULL AND
+            (
+                search_term IS NULL
+                OR c.first_name ILIKE '%' || search_term || '%'
+            )
+        ORDER BY c.id
+        LIMIT page_limit OFFSET page_offset
+    ) sub;
+
+    -- Return final object
+    RETURN jsonb_build_object(
+        'count', COALESCE(total_count_variable, 0),
+        'candidates', COALESCE(candidates_variable, '[]'::jsonb)
+    );
+END;
+
+$$ LANGUAGE plpgsql;
+
+
+CREATE OR REPLACE FUNCTION get_unscheduled_third_interviews(
+    search_term TEXT DEFAULT NULL,
+    page_limit INT DEFAULT 10,
+    page_offset INT DEFAULT 0
+)
+RETURNS JSONB AS $$
+
+DECLARE
+    total_count_variable INT;
+    candidates_variable JSONB;
+BEGIN
+    -- Count total
+    SELECT COUNT(*) INTO total_count_variable
+    FROM candidates c
+    LEFT JOIN scheduled_interviews si ON c.id = si.candidate_id
+    WHERE 
+        c.is_deleted = FALSE AND
+        si.is_first_interview_scheduled = TRUE AND
+        si.is_second_interview_scheduled = TRUE AND
+        si.is_third_interview_scheduled = FALSE AND
+        si.note_three IS NULL AND
+        si.note_two IS NOT NULL AND
+        (
+            search_term IS NULL
+            OR c.first_name ILIKE '%' || search_term || '%'
+        );
+
+    -- Fetch paginated records with nested scheduled_interview
+    SELECT jsonb_agg(row_data) INTO candidates_variable
+    FROM (
+        SELECT 
+            to_jsonb(c) || jsonb_build_object('scheduled_interview', to_jsonb(si)) AS row_data
+        FROM candidates c
+        LEFT JOIN scheduled_interviews si ON c.id = si.candidate_id
+        WHERE 
+            c.is_deleted = FALSE AND
+            si.is_first_interview_scheduled = TRUE AND
+            si.is_second_interview_scheduled = TRUE AND
+            si.is_third_interview_scheduled = FALSE AND
+            si.note_three IS NULL AND
+            si.note_two IS NOT NULL AND
+            (
+                search_term IS NULL
+                OR c.first_name ILIKE '%' || search_term || '%'
+            )
+        ORDER BY c.id
+        LIMIT page_limit OFFSET page_offset
+    ) sub;
+
+    -- Return final object
+    RETURN jsonb_build_object(
+        'count', COALESCE(total_count_variable, 0),
+        'candidates', COALESCE(candidates_variable, '[]'::jsonb)
+    );
+END;
+
+$$ LANGUAGE plpgsql;
+
+
+
+
+
+
+-- CREATE OR REPLACE FUNCTION public.get_daily_attendance_report(
+--   p_employee_id  INTEGER       DEFAULT NULL,
+--   p_code_search  TEXT          DEFAULT NULL,
+--   p_name_search  TEXT          DEFAULT NULL,
+--   p_month        INTEGER       DEFAULT NULL,
+--   p_year         INTEGER       DEFAULT NULL,
+--   p_start_date   DATE          DEFAULT NULL,
+--   p_end_date     DATE          DEFAULT NULL,
+--   p_limit        INTEGER       DEFAULT 10,
+--   p_offset       INTEGER       DEFAULT 0
+-- )
+-- RETURNS TABLE (
+--   employee_id         INTEGER,
+--   employee_code       TEXT,
+--   full_name           TEXT,
+--   designation_name    TEXT,
+--   check_in_time       TIME WITHOUT TIME ZONE,
+--   check_out_time      TIME WITHOUT TIME ZONE,
+--   break_start_time    TIME WITHOUT TIME ZONE,
+--   break_end_time      TIME WITHOUT TIME ZONE,
+--   break_availed       INTERVAL,
+--   time_in_office      INTERVAL,
+--   work_time           INTERVAL,
+--   late_time           INTERVAL,
+--   overtime            INTERVAL,
+--   informed            BOOLEAN,
+--   informed_early_exit BOOLEAN,
+--   overtime_approved   BOOLEAN,
+--   attendance_date     DATE,
+--   created_at          TIMESTAMP WITH TIME ZONE,
+--   overall_count       BIGINT
+-- )
+-- LANGUAGE plpgsql
+-- STABLE
+-- AS $$
+-- BEGIN
+--   RETURN QUERY
+--   WITH 
+--   filtered_emps AS (
+--     SELECT
+--       e.id               AS employee_id,
+--       e.employee_code,
+--       d.name             AS designation_name,
+--       CONCAT_WS(
+--         ' ',
+--         c.first_name,
+--         c.second_name,
+--         c.third_name,
+--         c.forth_name
+--       )                   AS full_name,
+--       e.shift_start_time,
+--       e.shift_end_time
+--     FROM public.employees e
+--     JOIN public.candidates c
+--       ON c.id = e.candidate_id
+--     LEFT JOIN public.designations d
+--       ON d.id = e.designation_type
+--     WHERE
+--       (p_employee_id IS NULL OR e.id = p_employee_id)
+--       AND (p_code_search IS NULL OR e.employee_code ILIKE '%' || p_code_search || '%')
+--       AND (
+--         p_name_search IS NULL
+--         OR CONCAT_WS(
+--              ' ',
+--              c.first_name,
+--              c.second_name,
+--              c.third_name,
+--              c.forth_name
+--            ) ILIKE '%' || p_name_search || '%'
+--       )
+--   ),
+
+--   joined_logs AS (
+--     SELECT
+--       fe.*,
+--       dl.date           AS attendance_date,
+--       dl.created_at,
+--       dl.check_in_time,
+--       dl.check_out_time,
+--       dl.break_start_time,
+--       dl.break_end_time,
+--       dl.break_availed,
+--       dl.time_in_office,
+--       dl.informed,
+--       dl.informed_early_exit,
+--       dl.overtime_approved
+--     FROM filtered_emps fe
+--     JOIN public.daily_attendance_logs dl
+--       ON dl.employee_id = fe.employee_id
+--     WHERE
+--       -- date-range if provided:
+--       (
+--         p_start_date IS NOT NULL
+--         AND p_end_date   IS NOT NULL
+--         AND dl.date BETWEEN p_start_date AND p_end_date
+--       )
+--       OR
+--       -- otherwise, no date-range restriction:
+--       (p_start_date IS NULL AND p_end_date IS NULL)
+--       AND
+--       -- month/year filter if provided:
+--       (p_month IS NULL OR EXTRACT(MONTH FROM dl.date) = p_month)
+--       AND
+--       (p_year  IS NULL OR EXTRACT(YEAR  FROM dl.date) = p_year)
+--   ),
+
+--   computed AS (
+--     SELECT
+--       jl.employee_id,
+--       jl.employee_code,
+--       jl.full_name,
+--       jl.designation_name,
+--       jl.attendance_date,
+--       jl.check_in_time,
+--       jl.check_out_time,
+--       jl.break_start_time,
+--       jl.break_end_time,
+--       jl.break_availed,
+--       jl.time_in_office,
+
+--       -- work_time = time_in_office - break_availed
+--       CASE
+--         WHEN jl.time_in_office IS NULL OR jl.break_availed IS NULL THEN NULL
+--         ELSE (jl.time_in_office - jl.break_availed)::interval
+--       END AS work_time,
+
+--       -- late_time = GREATEST(check_in_time - shift_start_time, '00:00:00')
+--       CASE
+--         WHEN jl.check_in_time    IS NULL
+--           OR jl.shift_start_time IS NULL THEN NULL
+--         ELSE GREATEST(
+--                (jl.check_in_time - jl.shift_start_time),
+--                '00:00:00'
+--              )::interval
+--       END AS late_time,
+
+--       -- overtime = GREATEST(check_out_time - shift_end_time, '00:00:00')
+--       CASE
+--         WHEN jl.check_out_time   IS NULL
+--           OR jl.shift_end_time   IS NULL THEN NULL
+--         ELSE GREATEST(
+--                (jl.check_out_time - jl.shift_end_time),
+--                '00:00:00'
+--              )::interval
+--       END AS overtime,
+
+--       jl.informed,
+--       jl.informed_early_exit,
+--       jl.overtime_approved,
+--       jl.created_at
+--     FROM joined_logs jl
+--   ),
+
+--   numbered AS (
+--     SELECT
+--       c.*,
+--       COUNT(*) OVER() AS overall_count
+--     FROM computed c
+--     ORDER BY c.created_at DESC, c.employee_code
+--     LIMIT p_limit
+--     OFFSET p_offset
+--   )
+
+--   SELECT
+--     n.employee_id,
+--     n.employee_code,
+--     n.full_name,
+--     n.designation_name,
+--     n.check_in_time,
+--     n.check_out_time,
+--     n.break_start_time,
+--     n.break_end_time,
+--     n.break_availed,
+--     n.time_in_office,
+--     n.work_time,
+--     n.late_time,
+--     n.overtime,
+--     n.informed,
+--     n.informed_early_exit,
+--     n.overtime_approved,
+--     n.attendance_date,
+--     n.created_at,
+--     n.overall_count
+--   FROM numbered n;
+-- END;
+-- $$;
+
+
+CREATE OR REPLACE FUNCTION public.get_employee_leave_summary(
+  p_employee_id   INTEGER,
+  p_start_date    DATE      DEFAULT NULL,
+  p_end_date      DATE      DEFAULT NULL,
+  p_month         INTEGER   DEFAULT NULL,
+  p_year          INTEGER   DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  v_quota    JSONB;
+  v_requests JSONB;
+BEGIN
+  -- 1) Quota: full row + nested leave_type details
+  SELECT jsonb_agg(
+           to_jsonb(eq)
+           || jsonb_build_object('leave_type', to_jsonb(lvi))
+         )
+    INTO v_quota
+  FROM public.employee_leave_qouta AS eq
+  JOIN public.leaves_vacations_insurance AS lvi
+    ON eq.leave_type_id = lvi.id
+  WHERE eq.employee_id = p_employee_id;
+
+  -- 2) Requests: only approved, date‐only comparisons
+  SELECT jsonb_agg(to_jsonb(r))
+    INTO v_requests
+  FROM (
+    SELECT
+      lr.*,
+      lvi.name                 AS leave_type_name,
+      rep.employee_code        AS replacement_employee_code
+    FROM public.leave_requests AS lr
+    JOIN public.employee_leave_qouta AS eq
+      ON lr.leave_type_id = eq.id
+    JOIN public.leaves_vacations_insurance AS lvi
+      ON eq.leave_type_id = lvi.id
+    LEFT JOIN public.employees AS rep
+      ON lr.replacement_employee_id = rep.id
+    WHERE lr.employee_id = p_employee_id
+      AND lr.status = 'approved'
+      AND (p_start_date IS NULL OR lr.start_date >= p_start_date::date)
+      AND (p_end_date   IS NULL OR lr.end_date   <= p_end_date::date)
+      AND (p_month      IS NULL OR EXTRACT(MONTH  FROM lr.start_date) = p_month)
+      AND (p_year       IS NULL OR EXTRACT(YEAR   FROM lr.start_date) = p_year)
+    ORDER BY lr.start_date
+  ) AS r;
+
+  RETURN jsonb_build_object(
+    'quota',    COALESCE(v_quota,    '[]'::jsonb),
+    'requests', COALESCE(v_requests, '[]'::jsonb)
+  );
+END;
+$$;
+
+
+
+
+
+///// annoucment manidatory get_my_mandatory_announcements function defination
+
+
+DECLARE
+  _dept_id INTEGER;
+  _branch_id INTEGER;
+BEGIN
+  -- 1) Lookup this employee's department
+  SELECT organizational_unit_id, branch_id
+    INTO _dept_id, _branch_id
+    FROM public.employees
+   WHERE id = p_employee_id;
+
+  -- 2) Return all passed‐activation, mandatory announcements NOT yet acknowledged
+  RETURN QUERY
+    SELECT
+      a.id                   AS announcement_id,
+      a.status,
+      a.reference_no,
+      a.title,
+      a.description,
+      a.active_date,
+      a.expiry_date,
+      CASE
+        WHEN a.expiry_date IS NOT NULL
+             AND a.expiry_date >= CURRENT_DATE
+          THEN 'active'
+        ELSE 'expired'
+      END                   AS announcement_status,
+      a.created_by_id,
+      CONCAT_WS(' ',
+        cb.first_name,
+        cb.second_name,
+        cb.third_name,
+        cb.forth_name
+      )                     AS created_by_name,
+      a.attachment_path,
+      a.is_mandatory,
+      a.for_organization,
+      CASE
+        WHEN EXISTS (
+          SELECT 1
+            FROM public.announcement_acknowledgements ack
+           WHERE ack.announcement_id = a.id
+             AND ack.employee_id     = p_employee_id
+             AND ack.acknowledged    = TRUE
+        ) THEN 'read'
+        ELSE 'unread'
+      END                   AS read_status
+    FROM public.announcements a
+    JOIN public.employees ce
+      ON ce.id = a.created_by_id
+    JOIN public.candidates cb
+      ON cb.id = ce.candidate_id
+    WHERE
+      -- only those whose activation date has passed
+      a.active_date <= CURRENT_DATE
+      -- only mandatory ones
+      AND a.is_mandatory = TRUE
+      -- skip those already acknowledged
+      AND NOT EXISTS (
+        SELECT 1
+          FROM public.announcement_acknowledgements ack
+         WHERE ack.announcement_id = a.id
+           AND ack.employee_id     = p_employee_id
+      )
+      -- company filter if needed
+      AND (p_company_id IS NULL OR a.company_id = p_company_id)
+      -- org-wide or department-specific
+      AND (
+        a.for_organization = TRUE
+        OR (
+          a.for_organization = FALSE
+          AND EXISTS (
+            SELECT 1
+              FROM public.department_announcement da
+             WHERE da.announcement_id = a.id
+               AND da.department_id   = _dept_id
+          )
+          OR (_branch_id IS NOT NULL AND a.branch_id = _branch_id)
+        )
+      )
+    ORDER BY a.active_date DESC NULLS LAST;
+END;
+
+
+
+
+
+
+///// annoucment manidatory get_my_announcements function defination
+
+
+DECLARE
+  _dept_id INTEGER;
+  _branch_id INTEGER;
+  _today   DATE := COALESCE(p_today, NOW()::date);
+BEGIN
+  SELECT organizational_unit_id,branch_id
+    INTO _dept_id, _branch_id
+    FROM public.employees
+   WHERE id = p_employee_id;
+
+  RETURN QUERY
+    WITH filtered AS (
+      SELECT
+        a.id                   AS announcement_id,
+        a.status,
+        a.reference_no,
+        a.title,
+        a.description,                -- grab description
+        a.active_date,
+        a.expiry_date,
+        CASE
+          WHEN a.expiry_date::date >= _today THEN 'active'
+          ELSE 'expired'
+        END                   AS announcement_status,
+        a.created_by_id,
+        CONCAT_WS(' ',
+          cb.first_name,
+          cb.second_name,
+          cb.third_name,
+          cb.forth_name
+        )                     AS created_by_name,
+        a.attachment_path,
+        a.is_mandatory,
+        a.for_organization,
+        CASE
+          WHEN EXISTS(
+            SELECT 1
+              FROM public.announcement_acknowledgements ack
+             WHERE ack.announcement_id = a.id
+               AND ack.employee_id     = p_employee_id
+               AND ack.acknowledged    = TRUE
+          ) THEN 'read'
+          ELSE 'unread'
+        END                   AS read_status,
+        EXISTS(
+          SELECT 1
+            FROM public.announcement_acknowledgements ack2
+           WHERE ack2.announcement_id = a.id
+             AND ack2.employee_id     = p_employee_id
+             AND ack2.is_liked        = TRUE
+        )                     AS is_liked
+      FROM public.announcements a
+      JOIN public.employees ce
+        ON ce.id = a.created_by_id
+      JOIN public.candidates cb
+        ON cb.id = ce.candidate_id
+      WHERE
+        a.active_date::date <= _today
+        AND (p_company_id IS NULL OR a.company_id = p_company_id)
+        AND (
+          p_search IS NULL
+          OR a.title        ILIKE '%' || p_search || '%'
+          OR a.reference_no ILIKE '%' || p_search || '%'
+          OR a.description  ILIKE '%' || p_search || '%'  -- include description in search if desired
+        )
+        AND (
+          a.for_organization
+          OR EXISTS (
+            SELECT 1
+              FROM public.department_announcement da
+             WHERE da.announcement_id = a.id
+               AND da.department_id   = _dept_id
+          )
+          OR (_branch_id IS NOT NULL AND a.branch_id = _branch_id)
+        )
+    ),
+    numbered AS (
+      SELECT
+        f.*,
+        COUNT(*) OVER() AS overall_count
+      FROM filtered f
+      ORDER BY f.active_date DESC NULLS LAST
+      LIMIT p_limit
+      OFFSET p_offset
+    )
+  SELECT
+    n.announcement_id,
+    n.status,
+    n.reference_no,
+    n.title,
+    n.description,                 -- include in final output
+    n.active_date,
+    n.expiry_date,
+    n.announcement_status,
+    n.created_by_id,
+    n.created_by_name,
+    n.attachment_path,
+    n.is_mandatory,
+    n.for_organization,
+    n.read_status,
+    n.is_liked,
+    n.overall_count
+  FROM numbered n;
+END;

@@ -1,0 +1,9 @@
+ALTER TABLE candidates
+ADD COLUMN full_name TEXT GENERATED ALWAYS AS (
+    TRIM(COALESCE(first_name, '') || ' ' || 
+         COALESCE(second_name, '') || ' ' || 
+         COALESCE(third_name, '') || ' ' || 
+         COALESCE(forth_name, ''))
+) STORED;
+
+

@@ -1,0 +1,131 @@
+.top-navbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background-color: white;
+    padding: 10px 24px;
+    border-bottom: 1px solid #e5e5e5;
+    font-family: "Inter", sans-serif;
+  }
+  
+  .nav-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  
+  .menu-icon {
+    color: #333;
+  }
+  
+  .arabic-logo {
+    height: 30px;
+  }
+  
+  .mrna-logo {
+    height: 30px;
+  }
+  
+  .nav-center {
+    display: flex;
+    gap: 32px;
+    align-items: center;
+  }
+  
+  .nav-link {
+    display: flex;
+    align-items: center;
+    color: #2b3674;
+    font-size: 14px;
+    font-weight: 500;
+    gap: 6px;
+    cursor: pointer;
+  }
+  
+  .nav-link:hover {
+    color: #1a237e;
+  }
+  
+  .nav-icon {
+    font-size: 20px;
+  }
+  
+  .nav-right {
+    display: flex;
+    align-items: center;
+  }
+  
+  .sidebar {
+    width: 280px;
+    background-color: #fff;
+    border-right: 1px solid #eee;
+    height: 100vh;
+    overflow-y: auto; /* Add scroll when needed */
+    display: flex;
+    flex-direction: column;
+    padding-top: 1rem ;
+    padding-bottom: 1rem ;
+  }
+  
+  .user-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    margin-bottom: 16px;
+  }
+  
+  .logout-button {
+    margin-top: 12px;
+    font-size: 12px;
+    padding: 4px 16px;
+    border-radius: 8px;
+    text-transform: none;
+  }
+  
+  .sub-link {
+    text-decoration: none;
+    color: inherit;
+    display: block;
+  }
+  
+  .active-link .MuiListItemButton-root {
+    background-color: #e3f2fd !important;
+    color: #1976d2;
+  }
+  
+  .user-section {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    margin-bottom: 16px;
+  }
+  
+  .logout-button {
+    margin-top: 12px;
+    font-size: 12px;
+    padding: 4px 16px;
+    border-radius: 8px;
+    text-transform: none;
+  }
+  
+  .layout-container {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  
+  .layout-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+  
+  .layout-content {
+    flex: 1;
+    padding: 24px;
+    overflow-y: auto;
+    background-color: #f9f9f9;
+  }
+  

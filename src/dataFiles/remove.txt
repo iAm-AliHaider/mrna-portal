@@ -1,0 +1,9 @@
+ALTER TABLE scheduled_interviews
+  DROP COLUMN IF EXISTS candidate_number,
+  DROP COLUMN IF EXISTS interview_time,
+  DROP COLUMN IF EXISTS interview_date;
+
+ALTER TABLE scheduled_interviews
+  ADD COLUMN IF NOT EXISTS note_one TEXT,
+  ADD COLUMN IF NOT EXISTS note_two TEXT,
+  ADD COLUMN IF NOT EXISTS note_three TEXT;

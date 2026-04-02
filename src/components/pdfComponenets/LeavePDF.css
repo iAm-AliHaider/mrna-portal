@@ -1,0 +1,78 @@
+
+
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap');
+
+.pdf-wrapper {
+  font-family: 'Montserrat', sans-serif;
+  color: black;
+  font-size: 10pt;
+  padding: 2cm;
+}
+
+.pdf-wrapper h2 {
+  color: #60D0E4;
+  text-transform: uppercase;
+  margin: 1cm 0 0.5cm;
+}
+
+.info-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 12px;
+}
+
+.status-badge {
+  background-color: #c6f6d5;
+  padding: 2px 6px;
+  border-radius: 10px;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 8pt;
+}
+
+.pdf-footer {
+  margin-top: 2cm;
+  font-size: 8pt;
+  font-style: italic;
+  text-align: right;
+}
+
+/* Ensures breaks happen between rows naturally */
+tr {
+  page-break-inside: avoid;
+}
+
+/* Forces a break before the table if needed */
+.page-break {
+  page-break-before: always;
+}
+
+/* Optional: prevent breaking important sections like headers/footers */
+section, aside {
+  page-break-inside: avoid;
+}
+@media print {
+  body {
+    width: 210mm;
+    height: 297mm;
+    margin: 0;
+  }
+}
+
+
+.pdf-page {
+    page-break-after: always;
+  }
+  .pdf-page:last-of-type {
+    page-break-after: auto;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tr {
+    page-break-inside: avoid;
+  }
+  

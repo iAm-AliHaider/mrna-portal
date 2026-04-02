@@ -1,0 +1,82 @@
+{
+    "name":  "mrna",
+    "version":  "0.1.0",
+    "private":  true,
+    "dependencies":  {
+                         "@azure/msal-browser":  "^4.24.1",
+                         "@azure/msal-react":  "^3.0.20",
+                         "@emotion/react":  "^11.14.0",
+                         "@emotion/styled":  "^11.14.0",
+                         "@mui/icons-material":  "^7.1.0",
+                         "@mui/material":  "^7.1.0",
+                         "@popperjs/core":  "^2.11.8",
+                         "@react-google-maps/api":  "^2.20.6",
+                         "@supabase/supabase-js":  "^2.49.8",
+                         "@testing-library/dom":  "^10.4.0",
+                         "@testing-library/jest-dom":  "^6.6.3",
+                         "@testing-library/react":  "^16.3.0",
+                         "@testing-library/user-event":  "^13.5.0",
+                         "@tiptap/extension-code-block-lowlight":  "^3.4.4",
+                         "@tiptap/extension-color":  "^3.4.4",
+                         "@tiptap/extension-highlight":  "^3.4.4",
+                         "@tiptap/extension-link":  "^3.4.4",
+                         "@tiptap/extension-text-align":  "^3.4.4",
+                         "@tiptap/extension-text-style":  "^3.4.4",
+                         "@tiptap/extension-underline":  "^3.4.4",
+                         "@tiptap/react":  "^3.4.4",
+                         "@tiptap/starter-kit":  "^3.4.4",
+                         "aws-sdk":  "^2.1692.0",
+                         "country-state-city":  "^3.2.1",
+                         "crypto-js":  "^4.2.0",
+                         "date-fns":  "^4.1.0",
+                         "emailjs-com":  "^3.2.0",
+                         "formik":  "^2.4.6",
+                         "html2pdf.js":  "^0.10.3",
+                         "lodash.debounce":  "^4.0.8",
+                         "lowlight":  "^3.3.0",
+                         "pdfjs-dist":  "^5.3.93",
+                         "react":  "^19.1.1",
+                         "react-dom":  "^19.1.1",
+                         "react-hot-toast":  "^2.5.2",
+                         "react-pdf":  "^10.0.1",
+                         "react-phone-input-2":  "^2.15.1",
+                         "react-router-dom":  "^7.6.0",
+                         "react-scripts":  "5.0.1",
+                         "web-vitals":  "^2.1.4",
+                         "yup":  "^1.6.1",
+                         "lodash":  "4.17.21"
+                     },
+    "scripts":  {
+                    "start":  "node --max_old_space_size=4096 node_modules/react-scripts/scripts/start.js",
+                    "build":  "react-scripts build",
+                    "test":  "react-scripts test",
+                    "eject":  "react-scripts eject"
+                },
+    "eslintConfig":  {
+                         "extends":  [
+                                         "react-app",
+                                         "react-app/jest"
+                                     ]
+                     },
+    "browserslist":  {
+                         "production":  [
+                                            "\u003e0.2%",
+                                            "not dead",
+                                            "not op_mini all"
+                                        ],
+                         "development":  [
+                                             "last 1 chrome version",
+                                             "last 1 firefox version",
+                                             "last 1 safari version"
+                                         ]
+                     },
+    "devDependencies":  {
+                            "@tailwindcss/postcss":  "^4.1.7",
+                            "autoprefixer":  "^10.4.21",
+                            "postcss":  "^8.5.3",
+                            "tailwindcss":  "^3.4.1"
+                        },
+    "overrides":  {
+
+                  }
+}

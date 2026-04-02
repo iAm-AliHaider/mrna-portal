@@ -1,0 +1,164 @@
+/* JobOfferPDF.css */
+
+.job-offer-pdf {
+    font-family: 'Arial', sans-serif;
+    font-size: 10pt;
+    color: #000;
+    padding: 24px;
+    width: 800px;
+    margin: auto;
+    direction: rtl;
+    line-height: 1.6;
+  }
+  
+  .job-offer-header {
+    border-bottom: 2px solid  #750c01;
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+  }
+  
+  .job-offer-header-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  
+  .job-offer-logo {
+    height: 60px;
+  }
+  
+  .job-offer-title {
+    font-size: 18pt;
+    font-weight: bold;
+  }
+  
+  .job-offer-header-info {
+    margin-top: 10px;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+  
+  .job-offer-header-info > div {
+    width: 48%;
+    margin-top: 4px;
+  }
+  
+  .job-offer-salary {
+    margin: 20px 0;
+    margin-bottom: 0px;
+  }
+  
+  .job-offer-salary-table {
+    width: 100%;
+    border-collapse: collapse;
+    border: 1px solid #000;
+  }
+  
+  .job-offer-salary-table th,
+  .job-offer-salary-table td {
+    border: 1px solid #000;
+    padding: 6px;
+    text-align: center;
+  }
+  
+  .job-offer-salary-table th {
+    background-color: #f2f2f2;
+  }
+  
+  .job-offer-notes {
+    margin: 20px 0;
+    margin-top: 15px;
+  }
+  
+  .job-offer-notes h3 {
+    font-size: 12pt;
+    font-weight: bold;
+    border-bottom: 1px solid #000;
+    padding-bottom: 6px;
+    margin-bottom: 12px;
+  }
+  
+  .job-offer-notes ul {
+    list-style: disc;
+    padding-right: 20px;
+  }
+  
+  .job-offer-notes li {
+    margin-bottom: 6px;
+  }
+  
+  .job-offer-notes li ul {
+    list-style: circle;
+    margin-top: 6px;
+    padding-right: 20px;
+  }
+  
+  .job-offer-footer {
+    margin-top: 40px;
+  }
+  
+  .job-offer-signatures {
+    display: flex;
+    justify-content: space-between;
+    text-align: center;
+  }
+  
+  .job-offer-signatures > div {
+    width: 32%;
+  }
+  
+  .job-offer-footer-secret {
+    text-align: left;
+    color: blue;
+    font-weight: bold;
+    margin-top: 10px;
+  }
+  
+.header-value-box {
+  border: 1px dotted #000;
+}
+
+.border-bottom {
+  border-bottom: 1px dotted #000;
+}
+
+.text-center {
+  text-align: center;
+}
+
+/* value box (the bordered cell with the dynamic text) */
+.header-value-box{
+  border: 0.75pt dotted #000;
+  padding: 4pt 6pt 6pt;       /* extra bottom padding prevents clipping */
+  line-height: 1.25;          /* avoids descender cut-off on print */
+  vertical-align: middle;
+  box-sizing: border-box;
+  overflow: visible;          /* make sure nothing is hidden on print */
+}
+.header-value-box > strong{
+  display: inline-block;      /* ensures line-height applies cleanly */
+  line-height: 1.2;
+  font-weight: 700;
+}
+
+/* the small 2-column tables under each box */
+.header-mini-table{
+  border-collapse: separate;  /* prevent border-collapsed clipping quirks */
+  border-spacing: 0;
+  table-layout: fixed;
+}
+
+/* dotted label line under each pair */
+.border-bottom td{
+  border-bottom: 0.75pt dotted #000;
+  padding-bottom: 2pt;        /* small space above dotted line */
+  vertical-align: top;
+}
+
+@media print{
+  .header-value-box{ padding: 4pt 6pt 7pt; line-height: 1.28; }
+  .header-mini-table{ border-collapse: separate; border-spacing: 0; }
+  td, th{ vertical-align: middle; }
+  *{ -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
