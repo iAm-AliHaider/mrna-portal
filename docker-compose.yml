@@ -1,0 +1,305 @@
+version: "3.8"
+
+services:
+  # ==========================================
+  # PostgreSQL Database
+  # ==========================================
+  db:
+    image: supabase/postgres:15.8.1.060
+    container_name: mrna-db
+    restart: unless-stopped
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - mrna-db-data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mrna-net
+
+  # ==========================================
+  # PostgREST (Supabase REST API)
+  # ==========================================
+  rest:
+    image: postgrest/postgrest:v12.2.8
+    container_name: mrna-rest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://supabase_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      PGRST_DB_SCHEMAS: public
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      PGRST_DB_USE_LEGACY_GUCS: "false"
+    networks:
+      - mrna-net
+
+  # ==========================================
+  # GoTrue (Supabase Auth)
+  # ==========================================
+  auth:
+    image: supabase/gotrue:v2.158.1
+    container_name: mrna-auth
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: 9999
+      API_EXTERNAL_URL: ${API_EXTERNAL_URL}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?search_path=auth
+      GOTRUE_SITE_URL: ${GOTRUE_SITE_URL}
+      GOTRUE_URI_ALLOW_LIST: ${GOTRUE_URI_ALLOW_LIST}
+      GOTRUE_JWT_SECRET: ${JWT_SECRET}
+      GOTRUE_JWT_EXP: ${GOTRUE_JWT_EXP}
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: ${GOTRUE_EXTERNAL_EMAIL_ENABLED}
+      GOTRUE_MAILER_AUTOCONFIRM: ${GOTRUE_MAILER_AUTOCONFIRM}
+      GOTRUE_DISABLE_SIGNUP: "false"
+      GOTRUE_MAILER_URLPATHS_CONFIRMATION: "/auth/v1/verify"
+      GOTRUE_MAILER_URLPATHS_INVITE: "/auth/v1/verify"
+      GOTRUE_MAILER_URLPATHS_RECOVERY: "/auth/v1/verify"
+      GOTRUE_SMTP_HOST: ${SMTP_HOST}
+      GOTRUE_SMTP_PORT: ${SMTP_PORT}
+      GOTRUE_SMTP_ADMIN_EMAIL: ${SMTP_FROM}
+    networks:
+      - mrna-net
+
+  # ==========================================
+  # Supabase Realtime
+  # ==========================================
+  realtime:
+    image: supabase/realtime:v2.33.70
+    container_name: mrna-realtime
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: supabase_admin
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+      DB_NAME: ${POSTGRES_DB}
+      DB_SSL: "false"
+      SLOT_NAME: supabase_realtime_rls
+      TEMPORARY_SLOT: "true"
+      SECRET_KEY_BASE: ${JWT_SECRET}0000000000000000000000
+      ERL_AFLAGS: "-proto_dist inet_tcp"
+      DNS_NODES: "''"
+      APP_NAME: mrna-realtime
+    networks:
+      - mrna-net
+
+  # ==========================================
+  # Supabase Storage
+  # ==========================================
+  storage:
+    image: supabase/storage-api:v1.14.3
+    container_name: mrna-storage
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ANON_KEY: ${ANON_KEY}
+      SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgres://supabase_admin:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: local
+      GLOBAL_S3_BUCKET: stub
+      IS_MULTITENANT: "false"
+    volumes:
+      - mrna-storage-data:/var/lib/storage
+    networks:
+      - mrna-net
+
+  # ==========================================
+  # Kong (API Gateway)
+  # ==========================================
+  kong:
+    image: kong:2.8.1
+    container_name: mrna-kong
+    restart: unless-stopped
+    ports:
+      - "8100:8000"
+      - "8443:8443"
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /var/lib/kong/kong.yml
+      KONG_DNS_ORDER: LAST,A,CNAME
+      KONG_PLUGINS: request-transformer,cors,key-auth,acl,basic-auth
+      KONG_NGINX_PROXY_PROXY_BUFFER_SIZE: 160k
+      KONG_NGINX_PROXY_PROXY_BUFFERS: 64 160k
+    volumes:
+      - ./kong.yml:/var/lib/kong/kong.yml:ro
+    depends_on:
+      - rest
+      - auth
+      - storage
+    networks:
+      - mrna-net
+
+  # ==========================================
+  # Supabase Studio (Admin Dashboard)
+  # ==========================================
+  studio:
+    image: supabase/studio:20241202-60d0d77
+    container_name: mrna-studio
+    restart: unless-stopped
+    ports:
+      - "3300:3000"
+    environment:
+      STUDIO_PG_META_URL: http://meta:8080
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DEFAULT_ORGANIZATION_NAME: MRNA
+      DEFAULT_PROJECT_NAME: MRNA Portal
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_PUBLIC_URL: ${SUPABASE_PUBLIC_URL}
+      SUPABASE_ANON_KEY: ${ANON_KEY}
+      SUPABASE_SERVICE_KEY: ${SERVICE_ROLE_KEY}
+      AUTH_JWT_SECRET: ${JWT_SECRET}
+      NEXT_PUBLIC_ENABLE_LOGS: "true"
+      NEXT_ANALYTICS_BACKEND_PROVIDER: postgres
+    depends_on:
+      - kong
+      - meta
+    networks:
+      - mrna-net
+
+  # ==========================================
+  # PG Meta (for Studio)
+  # ==========================================
+  meta:
+    image: supabase/postgres-meta:v0.84.2
+    container_name: mrna-meta
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PG_META_PORT: 8080
+      PG_META_DB_HOST: db
+      PG_META_DB_PORT: 5432
+      PG_META_DB_NAME: ${POSTGRES_DB}
+      PG_META_DB_USER: supabase_admin
+      PG_META_DB_PASSWORD: ${POSTGRES_PASSWORD}
+    networks:
+      - mrna-net
+
+  # ==========================================
+  # MinIO (S3-compatible storage for uploads)
+  # ==========================================
+  minio:
+    image: minio/minio:latest
+    container_name: mrna-minio
+    restart: unless-stopped
+    ports:
+      - "9010:9000"
+      - "9011:9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - mrna-minio-data:/data
+    command: server /data --console-address ":9001"
+    networks:
+      - mrna-net
+
+  # ==========================================
+  # Mailpit (Dev Email Catcher)
+  # ==========================================
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: mrna-mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"
+      - "1025:1025"
+    networks:
+      - mrna-net
+
+  # ==========================================
+  # MRNA Backend (Express.js)
+  # ==========================================
+  mrna-backend:
+    build:
+      context: ../mrna-backend-src
+      dockerfile: Dockerfile
+    container_name: mrna-backend
+    restart: unless-stopped
+    ports:
+      - "4100:4000"
+    environment:
+      PORT: 4000
+      SUPABASE_URL: http://kong:8000
+      SUPABASE_ANON_KEY: ${SERVICE_ROLE_KEY}
+      ERP_URL: ${ERP_URL}
+      AZURE_TENANT_ID: ${AZURE_TENANT_ID}
+      AZURE_CLIENT_ID: ${AZURE_CLIENT_ID}
+      AZURE_CLIENT_SECRET: ${AZURE_CLIENT_SECRET}
+      BC_PROXY_TARGET: ${BC_PROXY_TARGET}
+      BC_PROXY_AUTH: ${BC_PROXY_AUTH}
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_USER: ""
+      SMTP_PASS: ""
+      SMTP_FROM: ${SMTP_FROM}
+      NODE_TLS_REJECT_UNAUTHORIZED: "0"
+    depends_on:
+      - kong
+      - mailpit
+    networks:
+      - mrna-net
+
+  # ==========================================
+  # MRNA Frontend (React)
+  # ==========================================
+  mrna-frontend:
+    build:
+      context: ../mrna-frontend-src
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_SUPABASE_URL: ${SUPABASE_PUBLIC_URL}
+        REACT_APP_SUPABASE_KEY: ${ANON_KEY}
+        REACT_APP_API_URL: http://151.106.18.142:4100
+        REACT_APP_ENCRYPTION_KEY: ${REACT_APP_ENCRYPTION_KEY}
+        REACT_APP_SYSTEM_URL: http://151.106.18.142:3200
+        REACT_APP_GOOGLE_MAPS_API_KEY: ""
+        REACT_APP_AWS_BUCKET: mrna-uploads
+        REACT_APP_AWS_REGION: us-east-1
+        REACT_APP_AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+        REACT_APP_AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    container_name: mrna-frontend
+    restart: unless-stopped
+    ports:
+      - "3200:80"
+    depends_on:
+      - kong
+    networks:
+      - mrna-net
+
+volumes:
+  mrna-db-data:
+  mrna-storage-data:
+  mrna-minio-data:
+
+networks:
+  mrna-net:
+    driver: bridge
